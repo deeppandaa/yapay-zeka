@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LocalQwenAgent</title>
+  <style>
+    :root { color-scheme: dark; font-family: Segoe UI, sans-serif; }
+    body { margin: 0; background: #101820; color: #edf4f7; }
+    main { max-width: 1100px; margin: auto; padding: 28px; }
+    header { display:flex; justify-content:space-between; align-items:center; gap:20px; margin-bottom:24px; }
+    h1 { margin:0; font-size:28px; } .muted { color:#9eb0bb; }
+    .grid { display:grid; grid-template-columns: 1fr 300px; gap:18px; }
+    section { background:#1a2935; border:1px solid #2f4656; border-radius:12px; padding:18px; }
+    #chat { min-height:520px; max-height:62vh; overflow:auto; display:flex; flex-direction:column; gap:12px; }
+    .msg { padding:12px 14px; border-radius:10px; white-space:pre-wrap; line-height:1.45; }
+    .user { background:#145c61; align-self:flex-end; max-width:85%; } .assistant { background:#243c4c; max-width:92%; }
+    textarea, input { width:100%; box-sizing:border-box; background:#0f1b23; color:#fff; border:1px solid #3d5868; border-radius:8px; padding:11px; }
+    textarea { min-height:90px; resize:vertical; } button { border:0; border-radius:8px; padding:11px 15px; cursor:pointer; color:#fff; background:#087f8c; }
+    button:hover { background:#0aa6b5; } .row { display:flex; gap:8px; margin-top:10px; } .row button { flex:1; }
+    #status { font-size:12px; } label { display:block; margin:15px 0 6px; color:#b7c8d0; }
+    @media(max-width:800px){ .grid{grid-template-columns:1fr;} main{padding:16px;} }
+  </style>
+</head>
+<body>
+<main>
+  <header><div><h1>LocalQwenAgent</h1><div class="muted">Yerel Qwen çalışma alanı</div></div><div id="status" class="muted">Durum kontrol ediliyor...</div></header>
+  <div class="grid">
+    <section><div id="chat"></div><label for="message">Mesaj</label><textarea id="message" placeholder="Kod, proje, hata veya belge hakkında sor..."></textarea><div class="row"><button id="send">Gönder</button><button id="clear">Temizle</button></div></section>
+    <aside>
+      <section><strong>Kaynak ekle</strong><input id="file" type="file" accept=".pdf,.txt,.md,.py,.json,.ts,.tsx,.png,.jpg,.jpeg,.webp"><div class="row"><button id="upload">Hafızaya ekle</button></div><p id="upload-status" class="muted"></p></section>
+      <section style="margin-top:18px"><strong>PDF'e ekle ve indir</strong><label for="pdf-addition">Sonuna eklenecek metin</label><textarea id="pdf-addition" placeholder="Örn. Ek Not: Başvuru Siemens AI Application Engineer pozisyonu içindir."></textarea><div class="row"><button id="pdf-export">Yeni PDF oluştur</button></div><p id="pdf-status" class="muted"></p></section>
+      <section style="margin-top:18px"><strong>API'siz web araştırması</strong><label for="research-urls">URL'ler (her satıra bir URL)</label><textarea id="research-urls" placeholder="https://example.org"></textarea><label for="research-question">Araştırma sorusu</label><textarea id="research-question" placeholder="Bu sayfalardaki önemli noktalar neler?"></textarea><div class="row"><button id="research">Araştır</button></div></section>
+      <section style="margin-top:18px"><strong>GitHub öğrenme modu</strong><label for="github-repos">Public repository URL'leri</label><textarea id="github-repos" placeholder="https://github.com/owner/repo"></textarea><label for="github-question">Ne öğrenmesini istiyorsun?</label><textarea id="github-question" placeholder="Bu projenin mimarisini ve kurulumunu öğren."></textarea><div class="row"><button id="github-research">GitHub'dan öğren</button></div><p id="github-status" class="muted"></p></section>
+      <section style="margin-top:18px"><strong>Video / ses analizi</strong><input id="media-file" type="file" accept=".mp4,.mov,.mkv,.avi,.wav,.mp3,.m4a,.webm"><div class="row"><button id="media-analyze">Analiz et</button></div><p id="media-status" class="muted"></p></section>
+      <section style="margin-top:18px"><strong>Onaylı araç</strong><label for="tool-command">Komut (workspace içinde)</label><input id="tool-command" placeholder="python script.py"><label><input id="tool-approved" type="checkbox" style="width:auto"> Açıkça onaylıyorum</label><div class="row"><button id="tool-run">Çalıştır</button></div><p id="tool-status" class="muted"></p></section>
+      <section style="margin-top:18px"><strong>Agent planı</strong><label for="agent-task">Ne yapılacak?</label><textarea id="agent-task" placeholder="DeepPanda testlerini çalıştır ve sonucu özetle."></textarea><div class="row"><button id="agent-plan">Plan çıkar</button></div><p id="agent-status" class="muted"></p></section>
+      <section style="margin-top:18px"><strong>Kalıcı not</strong><label for="note">Modelin hatırlayacağı not</label><textarea id="note" placeholder="Örn. DeepPanda testleri root venv ile çalıştırılır."></textarea><div class="row"><button id="save-note">Notu kaydet</button></div></section>
+      <section style="margin-top:18px"><strong>Eksik kurulumlar</strong><p id="setup-status" class="muted">Kontrol ediliyor...</p><div class="row"><button id="setup-check">Eksikleri kontrol et</button><button id="setup-install" disabled>Onayla ve kur</button></div><p id="setup-detail" class="muted"></p></section>
+    </aside>
+  </div>
+</main>
+<script>
+const chat = document.querySelector('#chat'); const message = document.querySelector('#message');
+function add(role, text){ const el=document.createElement('div'); el.className=`msg ${role}`; el.textContent=text; chat.appendChild(el); chat.scrollTop=chat.scrollHeight; }
+async function json(url, options){ const r=await fetch(url, options); const data=await r.json(); if(!r.ok) throw new Error(data.detail || 'İşlem başarısız'); return data; }
+async function send(){ const text=message.value.trim(); if(!text)return; add('user',text); message.value=''; document.querySelector('#send').disabled=true; try{ const data=await json('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text})}); add('assistant',data.content||'Model boş cevap döndürdü.'); if(data.memory)add('assistant','✓ '+data.memory); }catch(e){add('assistant','Hata: '+e.message);}finally{document.querySelector('#send').disabled=false;} }
+document.querySelector('#send').onclick=send; message.addEventListener('keydown',e=>{if(e.ctrlKey&&e.key==='Enter')send();}); document.querySelector('#clear').onclick=()=>chat.replaceChildren();
+document.querySelector('#save-note').onclick=async()=>{ const note=document.querySelector('#note'); try{await json('/api/memory',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({note:note.value})}); note.value=''; alert('Not kaydedildi.'); }catch(e){alert(e.message);} };
+document.querySelector('#upload').onclick=async()=>{ const file=document.querySelector('#file').files[0]; if(!file)return; const form=new FormData(); form.append('file',file); try{const data=await json('/api/upload',{method:'POST',body:form}); document.querySelector('#upload-status').textContent=data.filename+' hafızaya eklendi.';}catch(e){document.querySelector('#upload-status').textContent=e.message;} };
+document.querySelector('#pdf-export').onclick=async()=>{ const file=document.querySelector('#file').files[0]; const addition=document.querySelector('#pdf-addition').value.trim(); if(!file||!addition){document.querySelector('#pdf-status').textContent='PDF ve eklenecek metin gerekli.';return;} const form=new FormData(); form.append('file',file); form.append('addition',addition); try{const response=await fetch('/api/pdf/append',{method:'POST',body:form}); if(!response.ok){const error=await response.json();throw new Error(error.detail||'PDF olusturulamadi');} const blob=await response.blob(); const url=URL.createObjectURL(blob); const link=document.createElement('a'); link.href=url; link.download='localqwen_modified.pdf'; link.click(); URL.revokeObjectURL(url); document.querySelector('#pdf-status').textContent='Yeni PDF indirilmeye hazir.';}catch(e){document.querySelector('#pdf-status').textContent=e.message;} };
+document.querySelector('#research').onclick=async()=>{const urls=document.querySelector('#research-urls').value.split('\n').map(x=>x.trim()).filter(Boolean); const question=document.querySelector('#research-question').value.trim(); if(!urls.length||!question)return; add('assistant','Araştırma başlatıldı...'); try{const job=await json('/api/research/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({urls,question})}); let seen=0; const poll=async()=>{const data=await json('/api/research/jobs/'+job.job_id); const events=data.events||[]; events.slice(seen).forEach(event=>add('assistant','[Araştırma] '+event.message)); seen=events.length; if(data.status==='running'){setTimeout(poll,700);}else if(data.status==='completed'){add('assistant',data.content||'Yanıt boş.');}else{add('assistant','Araştırma hatası: '+(data.error||'bilinmiyor'));}}; poll();}catch(e){add('assistant','Web araştırması hatası: '+e.message);} };
+document.querySelector('#github-research').onclick=async()=>{const repositories=document.querySelector('#github-repos').value.split('\n').map(x=>x.trim()).filter(Boolean); const question=document.querySelector('#github-question').value.trim(); if(!repositories.length||!question)return; const status=document.querySelector('#github-status'); status.textContent='GitHub okunuyor ve öğrenme notu hazırlanıyor...'; try{const data=await json('/api/github/research',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({repositories,question})}); add('assistant',data.content); status.textContent=data.memory||'Kalıcı hafızaya kaydedildi.';}catch(e){status.textContent=e.message;} };
+document.querySelector('#media-analyze').onclick=async()=>{const file=document.querySelector('#media-file').files[0]; if(!file)return; const form=new FormData(); form.append('file',file); form.append('transcribe','true'); const status=document.querySelector('#media-status'); status.textContent='Media işleniyor...'; try{const data=await json('/api/media/analyze',{method:'POST',body:form}); add('assistant',JSON.stringify(data,null,2)); status.textContent='Analiz hafızaya kaydedildi.';}catch(e){status.textContent=e.message;} };
+document.querySelector('#tool-run').onclick=async()=>{const command=document.querySelector('#tool-command').value.trim().split(/\s+/); const approved=document.querySelector('#tool-approved').checked; try{const data=await json('/api/tools/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({command,approved})}); add('assistant',JSON.stringify(data,null,2));}catch(e){document.querySelector('#tool-status').textContent=e.message;} };
+document.querySelector('#agent-plan').onclick=async()=>{const message=document.querySelector('#agent-task').value.trim(); if(!message)return; try{const data=await json('/api/agent/plan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message,approved:false})}); add('assistant','Agent plani:\n'+data.steps.map((step,i)=>`${i+1}. ${step}`).join('\n')+'\n\nOnay gerekli: '+data.approval_required);}catch(e){document.querySelector('#agent-status').textContent=e.message;} };
+let setupPlan=null;
+async function checkSetup(){const data=await json('/api/setup/status'); setupPlan=data; const missing=data.commands.filter(x=>x.needed); document.querySelector('#setup-status').textContent=data.ready?'Tum kurulumlar hazir.':missing.length+' eksik kurulum bulundu.'; document.querySelector('#setup-detail').textContent=missing.map(x=>x.name+': '+x.command.join(' ')).join('\n'); document.querySelector('#setup-install').disabled=data.ready||!missing.length;}
+document.querySelector('#setup-check').onclick=()=>checkSetup().catch(e=>document.querySelector('#setup-detail').textContent=e.message);
+document.querySelector('#setup-install').onclick=async()=>{if(!setupPlan||!confirm('Eksik paket ve modeller indirilsin mi?'))return; const data=await json('/api/setup/prepare',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({approved:true})}); document.querySelector('#setup-detail').textContent=data.status; document.querySelector('#setup-install').disabled=true;};
+checkSetup().catch(()=>{});
+json('/api/status').then(s=>document.querySelector('#status').textContent='Model: '+s.model).catch(()=>document.querySelector('#status').textContent='Backend hazır değil');
+</script>
+</body>
+</html>

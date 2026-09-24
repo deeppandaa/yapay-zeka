@@ -1,0 +1,11 @@
+[
+  {"name":"transformers","repo":"https://github.com/huggingface/transformers.git","category":"modeling"},
+  {"name":"peft","repo":"https://github.com/huggingface/peft.git","category":"fine_tuning"},
+  {"name":"accelerate","repo":"https://github.com/huggingface/accelerate.git","category":"training"},
+  {"name":"datasets","repo":"https://github.com/huggingface/datasets.git","category":"data"},
+  {"name":"tokenizers","repo":"https://github.com/huggingface/tokenizers.git","category":"data"},
+  {"name":"sentence-transformers","repo":"https://github.com/UKPLab/sentence-transformers.git","category":"embeddings"},
+  {"name":"unsloth","repo":"https://github.com/unslothai/unsloth.git","category":"fine_tuning"},
+  {"name":"llama.cpp","repo":"https://github.com/ggml-org/llama.cpp.git","category":"inference"},
+  {"name":"sglang-ktransformers","repo":"https://github.com/kvcache-ai/ktransformers.git","category":"inference"}
+]

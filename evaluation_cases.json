@@ -1,0 +1,20 @@
+[
+  {
+    "name": "offline_coding_request",
+    "message": "DeepPanda icin yerel calisan bir Python servis yaz. Veriyi SQLite'a kaydetsin, dosya degisikliginden once diff gostersin ve pytest testi olsun.",
+    "expected_intent": "action_request",
+    "required_plan_terms": ["onay", "test", "workspace"]
+  },
+  {
+    "name": "research_request",
+    "message": "Bu public GitHub projesinin mimarisini incele ve kaynak URL'lerini belirt.",
+    "expected_intent": "research",
+    "required_plan_terms": ["kaynak"]
+  },
+  {
+    "name": "learning_request",
+    "message": "Bu DeepPanda prosedurunu kalici hafizaya kaydet ve gelecekte ayni kurali kullan.",
+    "expected_intent": "learn",
+    "required_plan_terms": ["hafiza"]
+  }
+]

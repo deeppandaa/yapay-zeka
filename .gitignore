@@ -1,0 +1,42 @@
+# Secrets and local configuration
+.env
+.env.local
+*.pem
+*.key
+*.token
+*credentials*
+
+# Local state and private history
+memory.db
+*.db
+.job-artifacts/
+.memory-delete-backups/
+*.log
+*.bak
+
+# Python environments and caches
+.venv/
+venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.py[cod]
+
+# Local model/runtime payloads
+AI-Runtimes/OllamaModels/
+AI-Runtimes/models/
+AI-Runtimes/ktransformers/
+AI-Runtimes/llama.cpp/
+AI-Runtimes/vcpkg/
+AI-Runtimes/hwloc/
+AI-Runtimes/hwloc-win64/
+*.gguf
+*.gguf.part
+
+# Local library checkouts are reproducible from library_catalog.json
+AI-Libraries/
+
+# Generated exports and installers
+*.zip
+*.exe
+*.iso
