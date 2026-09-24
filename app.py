@@ -1,14 +1,15 @@
 from __future__ import annotations
 
-import io
 import base64
 import ctypes
 import importlib.util
-import math
+import io
 import ipaddress
 import json
+import math
 import os
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -16,8 +17,7 @@ import tempfile
 import threading
 import time
 import uuid
-import shutil
-from datetime import datetime
+from datetime import UTC, datetime
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
@@ -31,12 +31,12 @@ from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from openpyxl import load_workbook
+from PIL import Image
 from pptx import Presentation
 from pydantic import BaseModel
 from pypdf import PdfReader, PdfWriter
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
-from PIL import Image
 
 from agent_orchestrator import decide, plan_for, system_prompt
 from agent_tools import AgentTools
@@ -165,6 +165,10 @@ class EmbeddingInstallRequest(BaseModel):
 
 
 class SetupRequest(BaseModel):
+    approved: bool = False
+
+
+class EvaluationRequest(BaseModel):
     approved: bool = False
 
 
@@ -875,7 +879,7 @@ def export_memory() -> dict[str, Any]:
             unique_memories.append(item)
     return {
         "format": "localqwen-memory-v1",
-        "exported_at": datetime.now().isoformat(timespec="seconds"),
+        "exported_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "memories": unique_memories,
         "operations": [dict(zip(("id", "operation", "reasoning", "result", "created_at"), row)) for row in operations],
     }
@@ -1221,6 +1225,31 @@ def agent_profile_execute(request: AgentProfileExecuteRequest) -> dict[str, Any]
     result = AGENT_TOOLS.run_approved(command, approved=True)
     journal_operation("profile_command", f"Profil={request.profile}, islem={request.action}", json.dumps(result, ensure_ascii=False))
     return {"profile": request.profile, "action": request.action, "command": command, **result}
+
+
+@app.post("/api/evaluation/run")
+def run_evaluation(request: EvaluationRequest) -> dict[str, Any]:
+    command = [sys.executable, str(ROOT / "run_evaluation.py")]
+    if not request.approved:
+        return {
+            "status": "approval_required",
+            "suite": "offline-coding-agent-hard",
+            "checks": ["intent classification", "plan quality", "source-aware research intent", "persistent learning intent"],
+            "command": command,
+        }
+    started = time.perf_counter()
+    result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=180, check=False)
+    payload = {
+        "status": "completed",
+        "passed": result.returncode == 0,
+        "returncode": result.returncode,
+        "duration_seconds": round(time.perf_counter() - started, 3),
+        "suite": "offline-coding-agent-hard",
+        "stdout": result.stdout[-12000:],
+        "stderr": result.stderr[-12000:],
+    }
+    journal_operation("evaluation", "Kullanici zor offline agent testini onayladi.", json.dumps(payload, ensure_ascii=False))
+    return payload
 
 
 @app.post("/api/agent/execute")
