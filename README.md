@@ -2,6 +2,16 @@
 
 Local browser-based Qwen workspace for coding, document analysis, and project memory.
 
+# Llama Cpp & Ollama Bridge with Agentic RAG
+
+A local AI bridge and agentic workspace integration built for **DeepPanda**. 
+
+### Key Features
+- **Offline-First Hybrid Architecture:** Uses Qwen models for local inference and fallback web search execution.
+- **Tool Calling Mechanism:** Automatically triggers web searches or internal tools when local context is insufficient.
+- **VS Code Copilot Integration:** Fully compatible with VS Code extensions (Continue, Twinny) via standard local endpoints (`http://localhost:11434`).
+- **Zero Data Leakage:** Ensures 100% privacy by keeping code completion, context analysis, and agentic reasoning on the local machine.
+
 ## Current capabilities
 
 - Local Ollama chat through a browser UI
