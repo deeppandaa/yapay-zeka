@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import ctypes
+import hashlib
 import importlib.util
 import io
 import ipaddress
@@ -316,7 +317,28 @@ def db() -> sqlite3.Connection:
     connection.execute(
         "CREATE TABLE IF NOT EXISTS library_repositories (repository TEXT PRIMARY KEY, topic TEXT NOT NULL DEFAULT '', local_path TEXT NOT NULL DEFAULT '', commit_sha TEXT NOT NULL DEFAULT '', learned INTEGER NOT NULL DEFAULT 0, created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP)"
     )
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS assets (id INTEGER PRIMARY KEY, kind TEXT NOT NULL, path TEXT NOT NULL, relative_path TEXT NOT NULL DEFAULT '', sha256 TEXT NOT NULL DEFAULT '', mime_type TEXT NOT NULL DEFAULT '', project TEXT NOT NULL DEFAULT '', source TEXT NOT NULL DEFAULT 'local', metadata_json TEXT NOT NULL DEFAULT '{}', created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP)"
+    )
     return connection
+
+
+def register_asset(path: Path, kind: str, mime_type: str = "", project: str = "", source: str = "local", metadata: dict[str, Any] | None = None) -> int:
+    resolved = path.resolve()
+    digest = hashlib.sha256(resolved.read_bytes()).hexdigest() if resolved.is_file() else ""
+    try:
+        relative = str(resolved.relative_to(WORKSPACE_ROOT))
+    except ValueError:
+        relative = str(resolved)
+    with db() as connection:
+        existing = connection.execute("SELECT id FROM assets WHERE path = ? AND sha256 = ?", (str(resolved), digest)).fetchone()
+        if existing:
+            return int(existing[0])
+        cursor = connection.execute(
+            "INSERT INTO assets(kind, path, relative_path, sha256, mime_type, project, source, metadata_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (kind, str(resolved), relative, digest, mime_type, project, source, json.dumps(metadata or {}, ensure_ascii=False)),
+        )
+        return int(cursor.lastrowid)
 
 
 def memory_context() -> str:
@@ -1282,6 +1304,32 @@ def semantic_memory_search(q: str = Query(..., min_length=1, max_length=500), li
     return {"query": q, "retrieval": "embedding", "embedding_model": OLLAMA_EMBED_MODEL, "count": len(scored), "memories": [{**dict(zip(fields, row)), "score": score} for score, row in scored]}
 
 
+@app.get("/api/assets")
+def list_assets(
+    kind: str = Query("", max_length=30),
+    q: str = Query("", max_length=500),
+    limit: int = Query(100, ge=1, le=500),
+) -> dict[str, Any]:
+    kind = kind if isinstance(kind, str) else ""
+    q = q if isinstance(q, str) else ""
+    clauses: list[str] = []
+    values: list[Any] = []
+    if kind.strip():
+        clauses.append("kind = ?")
+        values.append(kind.strip())
+    if q.strip():
+        clauses.append("(path LIKE ? OR relative_path LIKE ? OR metadata_json LIKE ?)")
+        values.extend([f"%{q.strip()}%"] * 3)
+    where = " WHERE " + " AND ".join(clauses) if clauses else ""
+    with db() as connection:
+        rows = connection.execute(
+            f"SELECT id, kind, path, relative_path, sha256, mime_type, project, source, metadata_json, created_at, updated_at FROM assets{where} ORDER BY updated_at DESC LIMIT ?",
+            [*values, limit],
+        ).fetchall()
+    fields = ("id", "kind", "path", "relative_path", "sha256", "mime_type", "project", "source", "metadata_json", "created_at", "updated_at")
+    return {"count": len(rows), "assets": [dict(zip(fields, row)) for row in rows]}
+
+
 @app.get("/v1/models")
 def openai_models() -> dict[str, Any]:
     return {
@@ -2093,6 +2141,7 @@ async def analyze_media(file: UploadFile = File(...), transcribe: bool = Form(Tr
     media_dir.mkdir(parents=True, exist_ok=True)
     source = media_dir / f"input{suffix}"
     source.write_bytes(data)
+    asset_id = register_asset(source, "video" if suffix in {".mp4", ".mov", ".mkv", ".avi", ".webm"} else "audio", file.content_type or "", source="upload", metadata={"filename": file.filename or "media"})
     audio = media_dir / "audio.wav"
     frames = media_dir / "frame-%03d.jpg"
     result: dict[str, Any] = {"filename": file.filename, "frames": [], "transcript": ""}
@@ -2145,6 +2194,7 @@ async def analyze_media(file: UploadFile = File(...), transcribe: bool = Form(Tr
             f"Media analiz notu: {file.filename}\nKare sayisi: {len(result['frames'])}\n"
             f"Transkript: {result['transcript'][:12000]}\nRapor: {json.dumps(result['report'], ensure_ascii=False)[:20000]}"
         )
+        result["asset_id"] = asset_id
         return result
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
         raise HTTPException(422, f"Media analizi basarisiz: {exc}") from exc
@@ -2179,9 +2229,12 @@ def generate_image(request: ImageGenerateRequest) -> FileResponse:
             ).images[0]
     except Exception as exc:
         raise HTTPException(503, f"Gorsel uretimi basarisiz: {exc}") from exc
-    output = Path(tempfile.gettempdir()) / f"localqwen_image_{uuid.uuid4().hex}.png"
+    output_dir = ROOT / ".asset-store" / "generated"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output = output_dir / f"localqwen_image_{uuid.uuid4().hex}.png"
     image.save(output, format="PNG")
-    return FileResponse(output, media_type="image/png", filename="localqwen_generated.png", background=BackgroundTask(output.unlink, missing_ok=True))
+    register_asset(output, "image", "image/png", source="generated", metadata={"prompt": prompt, "steps": steps, "width": width, "height": height})
+    return FileResponse(output, media_type="image/png", filename="localqwen_generated.png")
 
 
 @app.post("/api/media/video")
@@ -2220,7 +2273,12 @@ def generate_video(request: VideoGenerateRequest) -> FileResponse:
     except Exception as exc:
         shutil.rmtree(directory, ignore_errors=True)
         raise HTTPException(503, f"Video uretimi basarisiz: {exc}") from exc
-    return FileResponse(output, media_type="video/mp4", filename="localqwen_generated.mp4", background=BackgroundTask(shutil.rmtree, directory, ignore_errors=True))
+    output_dir = ROOT / ".asset-store" / "generated"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    persistent_output = output_dir / f"localqwen_video_{uuid.uuid4().hex}.mp4"
+    shutil.copy2(output, persistent_output)
+    register_asset(persistent_output, "video", "video/mp4", source="generated", metadata={"prompt": prompt, "duration_seconds": duration, "backend": "image-motion-ffmpeg"})
+    return FileResponse(persistent_output, media_type="video/mp4", filename="localqwen_generated.mp4", background=BackgroundTask(shutil.rmtree, directory, ignore_errors=True))
 
 
 @app.post("/api/media/image/edit")
@@ -2327,6 +2385,12 @@ async def upload(file: UploadFile = File(...)) -> dict[str, str]:
     data = read_upload(file)
     name = file.filename or "upload"
     suffix = Path(name).suffix.lower()
+    asset_dir = ROOT / ".asset-store" / "uploads"
+    asset_dir.mkdir(parents=True, exist_ok=True)
+    asset_path = asset_dir / f"{uuid.uuid4().hex}{suffix}"
+    asset_path.write_bytes(data)
+    kind = "image" if suffix in {".png", ".jpg", ".jpeg", ".webp"} else "document"
+    asset_id = register_asset(asset_path, kind, file.content_type or "", source="upload", metadata={"filename": name})
     if suffix in {".pdf", ".docx", ".pptx", ".xlsx", ".xlsm", ".txt", ".md", ".py", ".json", ".ts", ".tsx"}:
         text = extract_document_text(data, suffix)
     elif suffix in {".png", ".jpg", ".jpeg", ".webp"}:
@@ -2343,7 +2407,7 @@ async def upload(file: UploadFile = File(...)) -> dict[str, str]:
     note = f"Dosya: {name}\nYapi: {document_structure(data, suffix)}\n{text[:12000]}"
     with db() as connection:
         connection.execute("INSERT INTO memories(note) VALUES (?)", (note,))
-    return {"status": "indexed", "filename": name, "preview": text[:1000]}
+    return {"status": "indexed", "filename": name, "preview": text[:1000], "asset_id": str(asset_id)}
 
 
 @app.post("/api/report/export")
