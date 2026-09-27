@@ -37,6 +37,7 @@ from pydantic import BaseModel
 from pypdf import PdfReader, PdfWriter
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
+from starlette.background import BackgroundTask
 
 from agent_orchestrator import decide, plan_for, system_prompt
 from agent_tools import AgentTools
@@ -54,6 +55,7 @@ OLLAMA_EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text")
 CONTINUE_MODEL = os.getenv("CONTINUE_MODEL", OLLAMA_CODE_MODEL)
 OLLAMA_TIMEOUT_SECONDS = int(os.getenv("OLLAMA_TIMEOUT_SECONDS", "600"))
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_MB", "50")) * 1024 * 1024
+IMAGE_MODEL_PATH = Path(os.getenv("IMAGE_MODEL_PATH", r"D:\DeepPanda-Proje\AI-Models\tiny-sd"))
 AGENT_DEV_MODE = os.getenv("AGENT_DEV_MODE", "off").strip().lower()
 REQUIRE_MEMORY_APPROVAL = os.getenv("REQUIRE_MEMORY_APPROVAL", "off").strip().lower() in {"1", "true", "yes", "on"}
 
@@ -62,6 +64,8 @@ app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 AGENT_TOOLS = AgentTools(WORKSPACE_ROOT)
 RESEARCH_JOBS: dict[str, dict[str, Any]] = {}
 RESEARCH_LOCK = threading.Lock()
+IMAGE_PIPELINE: Any = None
+IMAGE_PIPELINE_LOCK = threading.Lock()
 
 
 class ChatRequest(BaseModel):
@@ -186,6 +190,19 @@ class SelfAuditRequest(BaseModel):
 class MediaRequest(BaseModel):
     filename: str
     transcribe: bool = True
+
+
+class ImageGenerateRequest(BaseModel):
+    prompt: str
+    steps: int = 4
+    width: int = 256
+    height: int = 256
+
+
+class VideoEditRequest(BaseModel):
+    start_seconds: float = 0
+    duration_seconds: float = 10
+    output_format: str = "mp4"
 
 
 class OpenAIChatRequest(BaseModel):
@@ -2033,6 +2050,98 @@ async def analyze_media(file: UploadFile = File(...), transcribe: bool = Form(Tr
         return result
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
         raise HTTPException(422, f"Media analizi basarisiz: {exc}") from exc
+
+
+@app.post("/api/media/image")
+def generate_image(request: ImageGenerateRequest) -> FileResponse:
+    """Generate one local image from the configured diffusion model."""
+    global IMAGE_PIPELINE
+    prompt = request.prompt.strip()
+    if not prompt or len(prompt) > 2_000:
+        raise HTTPException(400, "Gorsel promptu 1-2000 karakter olmali.")
+    if not IMAGE_MODEL_PATH.is_dir():
+        raise HTTPException(503, f"Gorsel modeli bulunamadi: {IMAGE_MODEL_PATH}")
+    steps = max(1, min(request.steps, 20))
+    width = max(128, min(request.width, 768)) // 8 * 8
+    height = max(128, min(request.height, 768)) // 8 * 8
+    try:
+        import torch
+        from diffusers import StableDiffusionPipeline
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        dtype = torch.float16 if device == "cuda" else torch.float32
+        with IMAGE_PIPELINE_LOCK:
+            if IMAGE_PIPELINE is None:
+                IMAGE_PIPELINE = StableDiffusionPipeline.from_pretrained(
+                    str(IMAGE_MODEL_PATH), local_files_only=True, dtype=dtype, safety_checker=None,
+                ).to(device)
+            image = IMAGE_PIPELINE(
+                prompt, num_inference_steps=steps, guidance_scale=0.0,
+                width=width, height=height,
+            ).images[0]
+    except Exception as exc:
+        raise HTTPException(503, f"Gorsel uretimi basarisiz: {exc}") from exc
+    output = Path(tempfile.gettempdir()) / f"localqwen_image_{uuid.uuid4().hex}.png"
+    image.save(output, format="PNG")
+    return FileResponse(output, media_type="image/png", filename="localqwen_generated.png", background=BackgroundTask(output.unlink, missing_ok=True))
+
+
+@app.post("/api/media/image/edit")
+async def edit_image(file: UploadFile = File(...), operation: str = Form("grayscale"), value: int = Form(0)) -> FileResponse:
+    """Apply a small, deterministic local edit to an uploaded image."""
+    data = read_upload(file)
+    try:
+        image = Image.open(io.BytesIO(data)).convert("RGBA")
+        if operation == "grayscale":
+            image = image.convert("L").convert("RGBA")
+        elif operation == "rotate":
+            image = image.rotate(max(-180, min(value, 180)), expand=True)
+        elif operation == "resize":
+            size = max(64, min(value, 2048))
+            ratio = size / max(image.width, image.height)
+            image = image.resize((max(1, round(image.width * ratio)), max(1, round(image.height * ratio))))
+        else:
+            raise HTTPException(400, "operation grayscale, rotate veya resize olmali.")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(400, f"Gorsel duzenlenemedi: {exc}") from exc
+    output = Path(tempfile.gettempdir()) / f"localqwen_edited_{uuid.uuid4().hex}.png"
+    image.save(output, format="PNG")
+    return FileResponse(output, media_type="image/png", filename="localqwen_edited.png", background=BackgroundTask(output.unlink, missing_ok=True))
+
+
+@app.post("/api/media/video/edit")
+async def edit_video(
+    file: UploadFile = File(...),
+    start_seconds: float = Form(0),
+    duration_seconds: float = Form(10),
+    output_format: str = Form("mp4"),
+) -> FileResponse:
+    """Trim and remux an uploaded video locally with FFmpeg."""
+    data = read_upload(file)
+    suffix = Path(file.filename or "video.mp4").suffix.lower() or ".mp4"
+    if suffix not in {".mp4", ".mov", ".mkv", ".webm", ".avi"}:
+        raise HTTPException(400, "Video formati desteklenmiyor.")
+    start = max(0, min(start_seconds, 86_400))
+    duration = max(0.1, min(duration_seconds, 86_400))
+    output_format = output_format.lower().lstrip(".")
+    if output_format not in {"mp4", "webm"}:
+        raise HTTPException(400, "output_format mp4 veya webm olmali.")
+    directory = Path(tempfile.mkdtemp(prefix="localqwen_video_"))
+    source = directory / f"input{suffix}"
+    output = directory / f"edited.{output_format}"
+    source.write_bytes(data)
+    codec = ["-c:v", "libvpx-vp9", "-c:a", "libopus"] if output_format == "webm" else ["-c:v", "libx264", "-c:a", "aac"]
+    try:
+        subprocess.run(
+            ["ffmpeg", "-y", "-ss", str(start), "-i", str(source), "-t", str(duration), *codec, str(output)],
+            check=True, capture_output=True, text=True, timeout=300,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        shutil.rmtree(directory, ignore_errors=True)
+        raise HTTPException(422, f"Video duzenleme basarisiz: {exc}") from exc
+    return FileResponse(output, media_type=f"video/{output_format}", filename=f"localqwen_edited.{output_format}", background=BackgroundTask(shutil.rmtree, directory, ignore_errors=True))
 
 
 @app.post("/api/memory")
