@@ -40,7 +40,7 @@
   <div class="grid">
     <section><div id="chat"></div><label for="message">Mesaj</label><textarea id="message" placeholder="Kod, proje, hata veya belge hakkında sor..."></textarea><div class="approval-bar"><label><input id="auto-approval" type="checkbox"> Otomatik öğrenme onayı</label><p class="approval-note">Açıkken öğrenme notları otomatik kaydedilir. Dosya, komut ve kurulum onayları yine ayrı istenir.</p></div><div class="row"><button id="send">Gönder</button><button id="clear">Temizle</button></div></section>
     <aside>
-      <section class="activity-panel"><strong>Anlık durum</strong><p id="activity-status">Hazır; işlem bekleniyor.</p><p id="activity-time">Son kontrol: bekleniyor</p></section>
+      <section class="activity-panel"><strong>Anlık durum</strong><p id="activity-status">Hazır; işlem bekleniyor.</p><p id="activity-time">Son kontrol: bekleniyor</p><p id="runtime-status" class="muted">Runtime kontrol ediliyor...</p></section>
       <section><strong>Yetenekler ve roller</strong><ul id="capability-list"><li>Yükleniyor...</li></ul></section>
       <section><strong>Kaynak ekle</strong><input id="file" type="file" accept=".pdf,.txt,.md,.py,.json,.ts,.tsx,.png,.jpg,.jpeg,.webp"><div class="row"><button id="upload">Hafızaya ekle</button></div><p id="upload-status" class="muted"></p></section>
       <section style="margin-top:18px"><strong>PDF'e ekle ve indir</strong><label for="pdf-addition">Sonuna eklenecek metin</label><textarea id="pdf-addition" placeholder="Örn. Ek Not: Başvuru Siemens AI Application Engineer pozisyonu içindir."></textarea><div class="row"><button id="pdf-export">Yeni PDF oluştur</button></div><p id="pdf-status" class="muted"></p></section>
@@ -94,8 +94,10 @@ const activityLabels={upload:'Dosya analizi başlatıldı...',research:'Web ara�
 document.querySelectorAll('button').forEach(button=>button.addEventListener('click',()=>{if(activityLabels[button.id])setActivity(activityLabels[button.id]);}));
 checkSetup().catch(()=>{});
 async function refreshStatus(){try{const s=await json('/api/status'); document.querySelector('#status').textContent='Model: '+s.model; const current=document.querySelector('#activity-status').textContent; if(!current.includes('başlatıldı')&&!current.includes('çalışıyor')&&!current.includes('hazırlanıyor'))setActivity('Backend hazır; işlem bekleniyor.');}catch(e){document.querySelector('#status').textContent='Backend hazır değil'; setActivity('Backend bağlantısı yok veya yanıt vermiyor.');}}
+async function refreshRuntime(){try{const runtime=await json('/api/runtime/status'); const local=runtime.local; const gpu=local.gpu.available?local.gpu.name:'CPU'; document.querySelector('#runtime-status').textContent=`${runtime.mode} | GPU: ${gpu} | Görsel: ${local.image_generation?'hazır':'eksik'} | Video: ${local.video_generation?'hazır':'eksik'}`;}catch(e){document.querySelector('#runtime-status').textContent='Runtime durumu alınamadı.';}}
 async function loadCapabilities(){try{const data=await json('/api/capabilities'); const list=document.querySelector('#capability-list'); list.replaceChildren(); data.capabilities.forEach(item=>{const li=document.createElement('li'); li.innerHTML=`<strong>${item.title}:</strong> ${item.description}`; list.appendChild(li);});}catch(e){document.querySelector('#capability-list').innerHTML='<li>Yetenek kataloğu yüklenemedi.</li>';}}
 refreshStatus(); setInterval(refreshStatus,10000);
+refreshRuntime(); setInterval(refreshRuntime,30000);
 loadCapabilities();
 </script>
 </body>

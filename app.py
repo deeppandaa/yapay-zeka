@@ -843,13 +843,49 @@ def index() -> FileResponse:
 
 @app.get("/api/status")
 def status() -> dict[str, Any]:
+    runtime = runtime_status()
     return {
         "model": OLLAMA_MODEL,
         "ollama": OLLAMA_BASE_URL,
         "workspace": str(WORKSPACE_ROOT),
         "memory_db": str(MEMORY_DB),
         "backup_root": str(AGENT_TOOLS.backup_root),
+        "runtime": runtime,
     }
+
+
+def runtime_status() -> dict[str, Any]:
+    gpu_available = False
+    gpu_name = ""
+    try:
+        import torch
+        gpu_available = bool(torch.cuda.is_available())
+        gpu_name = torch.cuda.get_device_name(0) if gpu_available else ""
+    except ImportError:
+        pass
+    return {
+        "offline_ready": True,
+        "mode": "offline-first",
+        "local": {
+            "chat": True,
+            "tts": True,
+            "workspace": True,
+            "image_generation": IMAGE_MODEL_PATH.is_dir(),
+            "video_generation": IMAGE_MODEL_PATH.is_dir() and shutil.which("ffmpeg") is not None,
+            "gpu": {"available": gpu_available, "name": gpu_name},
+        },
+        "online": {
+            "web_browsing": True,
+            "github": True,
+            "instagram_api": bool(INSTAGRAM_ACCESS_TOKEN and INSTAGRAM_USER_ID),
+        },
+        "approval_required": ["file_write", "command_execution", "browser_action", "instagram_publish"],
+    }
+
+
+@app.get("/api/runtime/status")
+def runtime() -> dict[str, Any]:
+    return runtime_status()
 
 
 def hardware_info() -> dict[str, Any]:
