@@ -2044,7 +2044,11 @@ def chat(request: ChatRequest) -> dict[str, str]:
     if any(marker in message.lower() for marker in ("ayrıntı", "ayrinti", "detay", "adım adım", "adim adim", "nedenini")):
         system += "\nKullanici ayrinti istedi: sonucu, gerekceleri, varsayimlari ve uygulanabilir adimlari ayrintili anlat; gizli ic dusunme taslagini yazma."
     conversation = [{"role": "system", "content": system}, *prior_messages, {"role": "user", "content": message}]
-    answer = call_ollama(conversation)
+    try:
+        answer = call_ollama(conversation)
+    except HTTPException as exc:
+        finish(f"Yerel model yanıt üretemedi: {exc.detail}", "model_error")
+        raise
     wants_learning = any(
         marker in message.lower()
         for marker in ("öğren", "ogren", "hafızaya", "hafizaya", "kalıcı", "kalici", "kaydet")

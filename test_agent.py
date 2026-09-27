@@ -217,3 +217,28 @@ def test_chat_session_recalls_relevant_turns_older_than_recent_window(tmp_path: 
     app.chat(app.ChatRequest(message="ORCHID kod adini hatirliyor musun?", session_id=session_id, memory=False))
 
     assert any(item["content"] == "Proje gizli kod adi ORCHID" for item in requested_messages[-1])
+
+
+def test_model_failure_is_saved_in_chat_session(tmp_path: Path, monkeypatch):
+    from fastapi import HTTPException
+
+    import app
+
+    monkeypatch.setattr(app, "MEMORY_DB", tmp_path / "memory.db")
+    monkeypatch.setattr(app, "workspace_context", lambda _query: "")
+    session_id = app.create_chat_session(app.ChatSessionRequest())["session_id"]
+
+    def unavailable(_messages):
+        raise HTTPException(503, "Ollama erisilemiyor.")
+
+    monkeypatch.setattr(app, "call_ollama", unavailable)
+    try:
+        app.chat(app.ChatRequest(message="Kayıtlı hata testi", session_id=session_id, memory=False))
+    except HTTPException as exc:
+        assert exc.status_code == 503
+    else:
+        raise AssertionError("unavailable model should return HTTP 503")
+
+    history = app.get_chat_messages(session_id)["messages"]
+    assert history[-1]["role"] == "assistant"
+    assert "Ollama erisilemiyor" in history[-1]["content"]
