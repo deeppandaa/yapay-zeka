@@ -1,0 +1,20 @@
+Title: Evidence-First Local Coding Agents: Safe Repository Navigation and Minimal Tested Patches on Consumer Hardware
+
+Abstract
+LocalQwenAgent explores an evidence-first coding-agent protocol for small local models. The agent separates repository navigation, minimal patching, and executable validation; stores task provenance; and constrains writes and commands. This paper will compare the protocol with a baseline agent across frozen repository tasks.
+
+Research question
+Can explicit hypothesis-driven navigation, semantic code context, approval-aware tools, and test-first validation improve patch success and reduce wasted tool calls for locally hosted coding agents?
+
+Method
+- Baseline: a local coding model with repository read and command tools.
+- Treatment: DeepPanda protocol with code-neighbor retrieval, repository navigation skill, task records, diff preview, bounded workspace writes, and post-patch validation.
+- Tasks: frozen public repository issues plus controlled DeepPanda evaluation cases.
+- Metrics: patch pass rate, first-attempt pass rate, test pass rate, tool calls, wall time, token budget, unrelated-file count, and recovery after a failed validation.
+- Provenance: commit SHA, model identifier/revision, prompt revision, suite revision, timestamp, and source hashes.
+
+Expected contribution
+A reproducible safety-aware protocol and evaluation resource for local software-engineering agents, with an implementation that can be adapted to Gemma 4 through the Kaggle harness.
+
+Required final sections
+Introduction; related work; method; task construction; experimental setup; results; ablations; limitations; reproducibility; citations.

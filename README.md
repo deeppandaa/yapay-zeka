@@ -76,6 +76,16 @@ Ollama models are kept in the runtime store under `Yapay Zeka\AI-Runtimes\Ollama
 
 The agent does not silently execute commands or install packages. Commands require explicit approval, and writes are restricted to `WORKSPACE_ROOT` with backups.
 
+Workspace içindeki dosya ve klasörler onaysız okunabilir. `.env` içindeki `ALLOW_EXTERNAL_PATHS=on` ile workspace dışı yollar da okunabilir ve onay sonrası yazılabilir; Windows, Program Files ve ProgramData gibi korunan sistem klasörleri engellidir. Yazma, silme, paket kurulumu ve komut çalıştırma ayrı açık onay gerektirir. İşletim sisteminin tamamına sınırsız okuma/yazma yetkisi verilmez.
+
+## Oturum ve özel sayfalar
+
+`/api/browser/snapshot` yalnızca yeni, headless ve public bir tarayıcı oturumu açar; Opera/Chrome çerezlerini veya mevcut girişleri taşımaz. Özel bir sayfa giriş istiyorsa kullanıcı kendi tarayıcısında giriş yapmalıdır. Agent şifre, MFA kodu, cookie veya token istemez/saklamaz; authenticated browser session bridge yoksa özel sayfayı okuyamaz. CAPTCHA ve MFA atlatılmaz.
+
+## GitHub topic öğrenme
+
+Public topic depolarını listelemek için `POST /api/github/topic/research` endpoint'ine `download=false` gönderin. `download=true` yalnızca `approved=true` ile shallow clone yapar; README ve public kaynaklar Qwen tarafından analiz edilir. Öğrenme notu `memory.db` içine, repo ve commit SHA bilgisi `library_repositories` tablosuna yazılır. Kayıtları `GET /api/github/repositories` ile görebilirsiniz.
+
 ## Eksik kutuphaneler
 
 Agent icindeki `dependencies` profili iki onayli islem sunar:

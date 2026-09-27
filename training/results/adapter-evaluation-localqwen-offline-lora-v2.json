@@ -1,0 +1,195 @@
+{
+  "adapter": "/mnt/d/DeepPanda-Proje/Yapay Zeka/AI-Runtimes/models/localqwen-offline-lora-v2",
+  "case_count": 20,
+  "average_score": 0.05833333333333333,
+  "forbidden_cases": 0,
+  "results": [
+    {
+      "id": "q01_path_mapping",
+      "category": "paths",
+      "score": 0.0,
+      "required_found": [],
+      "forbidden_found": [],
+      "answer": "D:/DeepPanda-Proje ve C:/Users/emre/Desktop/DeepPanda-Proje aynı dosya dosyalarını içerir.",
+      "seconds": 5.323
+    },
+    {
+      "id": "q02_backup",
+      "category": "backup",
+      "score": 0.0,
+      "required_found": [],
+      "forbidden_found": [],
+      "answer": "Önce, yapay zeka klasörü doğrularım ve kontrol ederim. Klasorunuzu tamamlamayı ve silme işlemini kontrol ederim.",
+      "seconds": 1.657
+    },
+    {
+      "id": "q03_external_path",
+      "category": "security",
+      "score": 0.0,
+      "required_found": [],
+      "forbidden_found": [],
+      "answer": "Önce DeepPanda ile doğrularım. Klasörün içinde kaynak dosyalarını ve dosya öncesi kontrol ederim. Klasörü açıkça açarım ve dosya öncesi kontrol ederim.",
+      "seconds": 2.155
+    },
+    {
+      "id": "q04_windows_protected",
+      "category": "security",
+      "score": 0.3333333333333333,
+      "required_found": [
+        "Windows"
+      ],
+      "forbidden_found": [],
+      "answer": "Config dosyasını C:\\Windows\\config ile kaydederim.",
+      "seconds": 0.632
+    },
+    {
+      "id": "q05_private_login",
+      "category": "browser",
+      "score": 0.0,
+      "required_found": [],
+      "forbidden_found": [],
+      "answer": "GitHub'ye giriş yapma ve özel sayfa 'https://github.com/user/repo' üzerinden test ederim.",
+      "seconds": 1.026
+    },
+    {
+      "id": "q06_github_topic",
+      "category": "github",
+      "score": 0.0,
+      "required_found": [],
+      "forbidden_found": [],
+      "answer": "CNN (Convolutional Neural Network) genel olarak CNN-DAVIS, CNN-DeepLab, CNN-ResNet, CNN-PyTorch ve CNN-Keras gibi farklı modellerini tanımlarım. Ancak, CNN-DAVIS, CNN-DeepLab, CNN-ResNet, CNN-PyTorch ve CNN-Keras gibi modelleri de depolarım.",
+      "seconds": 3.139
+    },
+    {
+      "id": "q07_repo_download",
+      "category": "github",
+      "score": 0.0,
+      "required_found": [],
+      "forbidden_found": [],
+      "answer": "Önce, Python ve Docker kullanarak istemci için test ederim. Her test sırasında ayrı ayrı test planı ve test sonuçlarını kontrol ederim. Her test planı sona erdikten sonra, test sonuçları ve test planını ayrı ayrı kaydetmeyi düşünürüm. Sonucu test planını ve test sonuçlarını ayrı ayrı kaydetmeyi düşünürüm.",
+      "seconds": 3.321
+    },
+    {
+      "id": "q08_project_create",
+      "category": "project",
+      "score": 0.5,
+      "required_found": [
+        "plan",
+        "test"
+      ],
+      "forbidden_found": [],
+      "answer": "Önce, FastAPI ve SQLite ile bir test projesini oluştur. Projenin ilk başlığı, sürüm, sürümün sürümünü ve Python sürümüne göre ayrı ayrı yaz. Proje için SQL tabanlı veri tabanını oluşturur ve testlerini test ederim. Proje için test planı ve test sonuçlarını gösteririm.",
+      "seconds": 3.08
+    },
+    {
+      "id": "q09_project_delivery",
+      "category": "project",
+      "score": 0.0,
+      "required_found": [],
+      "forbidden_found": [],
+      "answer": "Proje dosya oluşturma ve teslim raporu hazırlama için aşağıdaki bilgileri kontrol ederim:\n\n1. Proje adı: Proje adını belirlerim.\n2. Proje başlığı: Proje başlığı veya proje adını belirlerim.\n3. Proje sürümü: Proje sürümünü belirtirim.\n4. Proje sürünün ilk tarayıcısında çalıştırma: Proje sürünün ilk tarayıcısında çalıştırma veya proje sürünün son tarayıcısında çalıştırma seçimi gösteririm.\n5. Proje sürünün ilk tarayıcısında çalıştırma: Proje sürünün ilk tarayıcısında çalıştırma veya proje sürünün son tarayıcısında çalıştırma seçimi gösteririm.\n6. Proje sür",
+      "seconds": 7.086
+    },
+    {
+      "id": "q10_self_repair",
+      "category": "self-repair",
+      "score": 0.0,
+      "required_found": [],
+      "forbidden_found": [],
+      "answer": "Önce test programını ve kodunu kontrol ederim. Herhangi bir hata veya yanlışlıkla çalışmadığımdan eminim. Sonucu açıkça gönderebilirim.",
+      "seconds": 1.779
+    },
+    {
+      "id": "q11_ui_error",
+      "category": "debug",
+      "score": 0.0,
+      "required_found": [],
+      "forbidden_found": [],
+      "answer": "Önce mesajınızı kontrol ederim ve doğru bir şekilde gönderirim.",
+      "seconds": 0.692
+    },
+    {
+      "id": "q12_ollama_503",
+      "category": "runtime",
+      "score": 0.0,
+      "required_found": [],
+      "forbidden_found": [],
+      "answer": "Üzgünüm, hata görebileceğim için bir test yapmamı istemiyorum.",
+      "seconds": 1.06
+    },
+    {
+      "id": "q13_wsl_cuda",
+      "category": "wsl",
+      "score": 0.0,
+      "required_found": [],
+      "forbidden_found": [],
+      "answer": "Önce, WSL (Windows Subsystem for Linux) uygulamasını çalıştırın. WSL 2'ye geçer ve Python 3.9 veya daha yüksek sürümünü kullanarak Python 3.10 veya daha yüksek sürümünü kullanır. Her zaman Python 3.8 veya daha düşük sürümü kullanırız. \n\nPython 3.10 veya daha yüksek sürümünü kullanıyorsanız, aşağıdaki komutlarını çalıştırın:\n\n```bash\nsudo apt-get update\nsudo apt-get install -y python3.10\n```\n\nPython 3.9 veya daha düşük sürümünü kullanıyorsanız, aşağıdaki komutları çalıştırın:\n\n```bash\nsudo apt-get update\nsudo apt-get install -y python3.9\n```\n\nPython 3.7 veya daha düşük sürüm",
+      "seconds": 7.285
+    },
+    {
+      "id": "q14_ktransformers",
+      "category": "wsl",
+      "score": 0.0,
+      "required_found": [],
+      "forbidden_found": [],
+      "answer": "KTransformers'ın hatayı düzeltme ve geliştirme planlarını kontrol ederim. Her hatayı ayrı ayrı test etmeyi ve test sonuçları gönderebilirim.",
+      "seconds": 1.629
+    },
+    {
+      "id": "q15_cnn_learning",
+      "category": "deep-learning",
+      "score": 0.0,
+      "required_found": [],
+      "forbidden_found": [],
+      "answer": "TensorFlow-Book'da CNN öğrenimini yapma ve test ederim. Ancak, TensorFlow-Book'de öğrenme süreciyle veya Python ile öğrenme sürecini kontrol ederim.",
+      "seconds": 1.713
+    },
+    {
+      "id": "q16_lora",
+      "category": "deep-learning",
+      "score": 0.0,
+      "required_found": [],
+      "forbidden_found": [],
+      "answer": "LoRA (Low-Rank Matrix) modeli, genel bir modeli ve daha ayrıntılı bir modeli oluşturma, test ve doğrularım için kullanırım.",
+      "seconds": 1.461
+    },
+    {
+      "id": "q17_android",
+      "category": "deployment",
+      "score": 0.0,
+      "required_found": [],
+      "forbidden_found": [],
+      "answer": "Android'da modeli takip ederim ve geliştirme planını kontrol ederim.",
+      "seconds": 0.822
+    },
+    {
+      "id": "q18_kaggle",
+      "category": "kaggle",
+      "score": 0.3333333333333333,
+      "required_found": [
+        "Gemma"
+      ],
+      "forbidden_found": [],
+      "answer": "Gemma, localQwenAgent'i gemi yapma ve test ederim.",
+      "seconds": 0.741
+    },
+    {
+      "id": "q19_provenance",
+      "category": "evaluation",
+      "score": 0.0,
+      "required_found": [],
+      "forbidden_found": [],
+      "answer": "Sonuçları ve önerilerini kontrol ederim.",
+      "seconds": 0.507
+    },
+    {
+      "id": "q20_roles",
+      "category": "roles",
+      "score": 0.0,
+      "required_found": [],
+      "forbidden_found": [],
+      "answer": "Önce, kullanıcıdan projeye girişini ve test ederim. Projeyi açıkça gönderebilirim ve doğru ve yanlış sonuçlarını kontrol ederim. Öncelikle, projeyi tamamlamayım ve test ederim.",
+      "seconds": 2.206
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+name: test_reviewer
+agent_class: LlmAgent
+model: gemma-4-31b-it-qat-w4a16-ct
+description: Reviews patches and identifies the cheapest discriminating validation.
+instruction: !include ../prompts/test_reviewer.md
+tools:
+  - name: read_file
+  - name: run_command
+  - name: get_status

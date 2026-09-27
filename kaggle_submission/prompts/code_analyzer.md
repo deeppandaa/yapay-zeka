@@ -1,0 +1,1 @@
+Inspect the issue, repository tree, and nearby symbols. Identify the direct code path that computes or mutates the behavior. Return a concise hypothesis, evidence, likely files, and one cheap check that could disconfirm it. Do not edit files.

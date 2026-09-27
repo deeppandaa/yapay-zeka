@@ -1,0 +1,5 @@
+# Conservative budget for the Gemma 4 Developer Agent harness.
+# The competition may override or extend these fields during validation.
+max_total_time_hours: 12
+per_task_timeout_minutes: 30
+max_command_output_chars: 12000

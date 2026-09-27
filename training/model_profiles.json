@@ -1,0 +1,20 @@
+{
+  "windows": {
+    "backend": "ollama",
+    "model": "qwen3.6:latest",
+    "adapter_export": "GGUF after validation",
+    "endpoint": "http://127.0.0.1:11434"
+  },
+  "wsl_training": {
+    "python": ".venv-wsl/bin/python",
+    "device": "cuda",
+    "base_model": "Qwen/Qwen2.5-0.5B-Instruct",
+    "adapter_v2": "AI-Runtimes/models/localqwen-offline-lora-v2"
+  },
+  "android_linux": {
+    "backend": "llama.cpp",
+    "format": "GGUF",
+    "quantization": "Q4_K_M or Q5_K_M",
+    "no_full_pytorch_runtime": true
+  }
+}

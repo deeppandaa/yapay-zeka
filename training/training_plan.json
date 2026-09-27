@@ -1,0 +1,22 @@
+{
+  "name": "LocalQwenAgent offline behavior training",
+  "current_dataset": "training/offline_agent_tasks.jsonl",
+  "target_examples": 500,
+  "splits": {"train": 0.8, "validation": 0.1, "test": 0.1},
+  "quality_rules": [
+    "Her kayit tek bir davranisi olcmeli",
+    "Assistant cevabi onay, guvenlik ve test durumunu aciklamali",
+    "Kaynakta olmayan bilgi uydurulmamali",
+    "Workspace disi yollar ve sistem klasorleri korunmali",
+    "Her kod gorevinde test veya compile dogrulamasi olmali",
+    "Kisisel sirlar, tokenlar ve gercek credential verisi bulunmamali"
+  ],
+  "stages": [
+    {"id": "s1", "name": "RAG warmup", "status": "ready", "output": "memory.db"},
+    {"id": "s2", "name": "Assistant-only LoRA", "status": "ready", "output": "AI-Runtimes/models/localqwen-offline-lora-v2"},
+    {"id": "s3", "name": "500-example split", "status": "planned", "output": "training/splits"},
+    {"id": "s4", "name": "Validation and regression", "status": "planned", "output": "training/results"},
+    {"id": "s5", "name": "Windows Ollama/llama.cpp export", "status": "planned", "output": "AI-Runtimes/models/export"},
+    {"id": "s6", "name": "Android/Linux GGUF export", "status": "planned", "output": "AI-Runtimes/models/android"}
+  ]
+}

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -15,10 +16,21 @@ class AgentTools:
     def __init__(self, workspace: Path):
         self.workspace = workspace.resolve()
         self.backup_root = self.workspace / ".localqwen-backups"
+        self.external_paths = os.getenv("ALLOW_EXTERNAL_PATHS", "off").strip().lower() in {"1", "true", "yes", "on"}
+
+    def _is_protected_path(self, path: Path) -> bool:
+        protected = [
+            Path(os.environ.get("WINDIR", r"C:\Windows")).resolve(),
+            Path(os.environ.get("ProgramFiles", r"C:\Program Files")).resolve(),
+            Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")).resolve(),
+            Path(os.environ.get("ProgramData", r"C:\ProgramData")).resolve(),
+        ]
+        return any(path == root or root in path.parents for root in protected)
 
     def safe_path(self, relative: str) -> Path:
         path = (self.workspace / relative).resolve()
-        if path != self.workspace and self.workspace not in path.parents:
+        inside_workspace = path == self.workspace or self.workspace in path.parents
+        if self._is_protected_path(path) or (not inside_workspace and not self.external_paths):
             raise ValueError("Workspace disi dosya erisimi engellendi.")
         return path
 
@@ -74,7 +86,7 @@ class AgentTools:
     def run_approved(self, command: list[str], approved: bool = False) -> dict[str, object]:
         if not approved:
             return {"status": "approval_required", "command": command}
-        allowed_names = {"python", "py", "node", "npm", "pytest", "ruff", "ffmpeg", "ollama", "winget"}
+        allowed_names = {"git", "python", "py", "node", "npm", "pytest", "ruff", "ffmpeg", "ollama", "winget"}
         executable = Path(command[0]).resolve() if command else None
         if not command or (command[0].lower() not in allowed_names and executable != Path(sys.executable).resolve()):
             raise ValueError("Yalnizca izinli araclar calistirilabilir.")

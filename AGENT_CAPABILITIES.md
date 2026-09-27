@@ -13,7 +13,7 @@
 - Explain existing architecture
 - Generate modules, tests, README files, and project scaffolds
 - Propose a diff before editing
-- Write only inside `WORKSPACE_ROOT`
+- Read `WORKSPACE_ROOT` and, when `ALLOW_EXTERNAL_PATHS=on`, approved external paths except protected Windows/system directories
 - Back up existing files before writes
 - Run approved tests, typechecks, builds, and formatters
 - Summarize changed files and remaining failures
@@ -39,7 +39,7 @@
 - Commands require explicit approval
 - Allowed tools are limited to Python, Node, npm, and FFmpeg
 - Commands run in the workspace with `shell=False`
-- File writes are workspace-scoped and backed up
+- Approved file writes are backed up; protected Windows/system directories remain blocked
 - No registry, service, system-folder, or destructive operation access by default
 
 ## 6. Not yet automatic

@@ -47,6 +47,7 @@ ROOT = Path(__file__).resolve().parent
 WORKSPACE_ROOT = Path(os.getenv("WORKSPACE_ROOT", str(ROOT))).resolve()
 MEMORY_DB = ROOT / os.getenv("MEMORY_DB", "memory.db")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
+OLLAMA_CHAT_BASE_URL = os.getenv("OLLAMA_CHAT_BASE_URL", OLLAMA_BASE_URL).rstrip("/")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3.6:latest")
 OLLAMA_CODE_MODEL = os.getenv("OLLAMA_CODE_MODEL", "codellama:7b")
 OLLAMA_EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text")
@@ -86,6 +87,21 @@ class GitHubResearchRequest(BaseModel):
     repositories: list[str]
 
 
+class GitHubTopicResearchRequest(BaseModel):
+    topic_url: str
+    question: str = "Bu depolarin derin ogrenme ve CNN acisindan onemli desenlerini ozetle."
+    limit: int = 5
+    download: bool = False
+    approved: bool = False
+    destination: str = "GitHub-Public"
+
+
+class GitHubRepoDownloadRequest(BaseModel):
+    repository: str
+    destination: str
+    approved: bool = False
+
+
 class BrowserRequest(BaseModel):
     url: str
 
@@ -114,6 +130,30 @@ class AgentExecuteRequest(BaseModel):
 class AgentGenerateRequest(BaseModel):
     request: str
     project_path: str = ""
+    role: str = "coding"
+
+
+class AgentProjectRequest(BaseModel):
+    request: str
+    project_path: str = ""
+    role: str = "coding"
+    test_command: list[str] = []
+    approved: bool = False
+    task_id: str | None = None
+
+
+class SelfRepairRequest(BaseModel):
+    request: str = "Self-audit hatalarini duzelt"
+    role: str = "coding"
+    test_command: list[str] = []
+    approved: bool = False
+    task_id: str | None = None
+    max_attempts: int = 2
+    run_tests: bool = True
+
+
+class RoleRequest(BaseModel):
+    role: str
 
 
 class AgentApplyRequest(BaseModel):
@@ -179,6 +219,27 @@ class ReportExportRequest(BaseModel):
     format: str = "md"
 
 
+AGENT_ROLES: dict[str, dict[str, Any]] = {
+    "coding": {"title": "Kodlama", "focus": "Minimal kod degisikligi, test ve API uyumlulugu."},
+    "code_analyzer": {"title": "Kod Analisti", "focus": "Kontrol akisi, bagimliliklar ve kok neden analizi."},
+    "test_reviewer": {"title": "Test Uzmani", "focus": "En ucuz ayirt edici test, regresyon ve hata toparlama."},
+    "security_reviewer": {"title": "Guvenlik Uzmani", "focus": "Path, auth, secret, komut ve veri erisimi sinirlari."},
+    "deep_learning": {"title": "Derin Ogrenme", "focus": "Dataset, model, egitim, inference, GPU ve metrikler."},
+    "release_manager": {"title": "Release Yoneticisi", "focus": "Compile, paketleme, hash, yedekleme ve teslim kontrolu."},
+}
+
+AGENT_CAPABILITIES: list[dict[str, str]] = [
+    {"id": "workspace", "title": "Workspace okuma ve guvenli dosya akisi", "description": "Dosya okuma, diff, backup, onayli yazma ve rollback."},
+    {"id": "project_delivery", "title": "Offline proje uretimi ve teslimi", "description": "Klasor yapisi, kaynak, test, compile ve teslim manifesti."},
+    {"id": "self_repair", "title": "Sinirli self-repair", "description": "Audit, role odakli duzeltme, test ve en fazla uc deneme."},
+    {"id": "github_learning", "title": "GitHub topic ve repo ogrenme", "description": "Public repo listeleme, shallow clone, commit ve kalici hafiza."},
+    {"id": "deep_learning", "title": "Derin ogrenme pipeline", "description": "WSL CUDA, PyTorch, Transformers, PEFT, dataset ve metrik plani."},
+    {"id": "media", "title": "Belge ve medya analizi", "description": "PDF, ofis belgeleri, gorsel, ses/video, OCR ve Whisper."},
+    {"id": "research", "title": "Public web/GitHub arastirmasi", "description": "Kaynak URL takibi ve kaynakli ogrenme notlari."},
+    {"id": "observability", "title": "Anlik durum ve provenance", "description": "UI durum paneli, journal, evaluation artifact ve kaynak hashleri."},
+]
+
+
 def db() -> sqlite3.Connection:
     connection = sqlite3.connect(MEMORY_DB)
     connection.execute(
@@ -212,6 +273,9 @@ def db() -> sqlite3.Connection:
     )
     connection.execute(
         "CREATE TABLE IF NOT EXISTS job_records (job_id TEXT PRIMARY KEY, kind TEXT NOT NULL, question TEXT NOT NULL, urls TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL, artifact_dir TEXT NOT NULL, error TEXT NOT NULL DEFAULT '', created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP)"
+    )
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS library_repositories (repository TEXT PRIMARY KEY, topic TEXT NOT NULL DEFAULT '', local_path TEXT NOT NULL DEFAULT '', commit_sha TEXT NOT NULL DEFAULT '', learned INTEGER NOT NULL DEFAULT 0, created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP)"
     )
     return connection
 
@@ -302,21 +366,37 @@ def workspace_context(query: str) -> str:
         return ""
     snippets: list[str] = []
     allowed = {".py", ".md", ".txt", ".json", ".ts", ".tsx", ".ps1"}
-    for path in WORKSPACE_ROOT.rglob("*"):
-        if len(snippets) >= 8 or not path.is_file() or path.suffix.lower() not in allowed:
-            continue
-        try:
-            if path.stat().st_size > 300_000:
+    ignored_dirs = {
+        ".git", ".venv", ".venv-wsl", ".pytest_cache", ".ruff_cache",
+        ".localqwen-backups", "__pycache__", "node_modules", ".next",
+        "ai-runtimes", "ai-libraries", "github-public", "python311-x64",
+        "site-packages", "build", "dist", "target",
+    }
+    scanned_files = 0
+    max_scanned_files = 1500
+    for current_root, directories, filenames in os.walk(WORKSPACE_ROOT):
+        directories[:] = [name for name in directories if name.lower() not in ignored_dirs]
+        for filename in filenames:
+            if len(snippets) >= 8 or scanned_files >= max_scanned_files:
+                break
+            path = Path(current_root) / filename
+            if path.suffix.lower() not in allowed:
                 continue
-            text = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        lower = text.lower()
-        if any(term in lower for term in terms):
-            lines = [line.strip() for line in text.splitlines() if line.strip()]
-            matches = [line for line in lines if any(term in line.lower() for term in terms)]
-            if matches:
-                snippets.append(f"[{path.relative_to(WORKSPACE_ROOT)}] " + " ".join(matches[:3]))
+            scanned_files += 1
+            try:
+                if path.stat().st_size > 300_000:
+                    continue
+                text = path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            lowered = text.lower()
+            if any(term in lowered for term in terms):
+                lines = [line.strip() for line in text.splitlines() if line.strip()]
+                matches = [line for line in lines if any(term in line.lower() for term in terms)]
+                if matches:
+                    snippets.append(f"[{path.relative_to(WORKSPACE_ROOT)}] " + " ".join(matches[:3]))
+        if len(snippets) >= 8 or scanned_files >= max_scanned_files:
+            break
     return "\n".join(snippets)
 
 
@@ -344,7 +424,7 @@ def call_ollama(
     if json_format:
         payload["format"] = "json"
     request = Request(
-        f"{OLLAMA_BASE_URL}/api/chat",
+        f"{OLLAMA_CHAT_BASE_URL}/api/chat",
         data=json.dumps(payload).encode("utf-8"),
         headers={"Content-Type": "application/json"},
         method="POST",
@@ -533,7 +613,7 @@ def call_ollama_vision(data: bytes, prompt: str, suffix: str) -> str:
         "stream": False,
     }
     request = Request(
-        f"{OLLAMA_BASE_URL}/api/chat",
+        f"{OLLAMA_CHAT_BASE_URL}/api/chat",
         data=json.dumps(payload).encode("utf-8"),
         headers={"Content-Type": "application/json"},
         method="POST",
@@ -561,6 +641,66 @@ def github_sources(repository: str) -> list[str]:
         f"https://github.com/{owner}/{repo}",
         f"https://raw.githubusercontent.com/{owner}/{repo}/HEAD/README.md",
     ]
+
+
+class GitHubTopicParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.repositories: set[str] = set()
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag != "a":
+            return
+        href = dict(attrs).get("href") or ""
+        match = re.fullmatch(r"/([^/]+)/([^/#?]+)", href)
+        if match and match.group(1) not in {"topics", "collections", "orgs"}:
+            self.repositories.add(f"https://github.com/{match.group(1)}/{match.group(2)}")
+
+
+def github_topic_repositories(topic_url: str, limit: int = 5) -> list[str]:
+    parsed = urlparse(topic_url.strip().rstrip("/"))
+    if parsed.scheme not in {"http", "https"} or parsed.hostname != "github.com" or not parsed.path.startswith("/topics/"):
+        raise ValueError("Public GitHub topic URL gerekli: https://github.com/topics/...")
+    request = Request(topic_url, headers={"User-Agent": "DeepPanda-LocalQwenAgent/1.0"})
+    with urlopen(request, timeout=30) as response:
+        html = response.read().decode("utf-8", errors="replace")
+    parser = GitHubTopicParser()
+    parser.feed(html)
+    return sorted(parser.repositories)[: max(1, min(limit, 20))]
+
+
+def learn_repository(repository: str, topic: str, question: str, local_path: str = "") -> str:
+    sources = []
+    for source_url in github_sources(repository):
+        text = fetch_web_page(source_url)
+        if text.strip():
+            sources.append(f"KAYNAK: {source_url}\n{text[:12000]}")
+    if not sources:
+        raise ValueError(f"GitHub kaynagi okunamadi: {repository}")
+    answer = call_ollama([{"role": "user", "content": (
+        "GitHub deposunu incele ve soruya kanita dayali cevap ver. "
+        "Ogrenilen teknik desenleri, kurulumu, testleri ve DeepPanda'da uygulanabilecek noktalarini ayir. "
+        "Kaynakta olmayan bilgiyi uydurma.\n\nSORU: " + question + "\n\n" + "\n\n".join(sources)
+    )}])
+    save_typed_memory(
+        f"GitHub kutuphane ogrenimi\nRepo: {repository}\nTopic: {topic}\nLocal path: {local_path}\n\n{answer}",
+        "research",
+        str(WORKSPACE_ROOT),
+        "github:" + repository,
+    )
+    commit_sha = ""
+    if local_path:
+        try:
+            result = subprocess.run(["git", "-C", local_path, "rev-parse", "HEAD"], capture_output=True, text=True, timeout=30, check=False)
+            commit_sha = result.stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            commit_sha = ""
+    with db() as connection:
+        connection.execute(
+            "INSERT INTO library_repositories(repository, topic, local_path, commit_sha, learned, updated_at) VALUES (?, ?, ?, ?, 1, CURRENT_TIMESTAMP) ON CONFLICT(repository) DO UPDATE SET topic=excluded.topic, local_path=excluded.local_path, commit_sha=excluded.commit_sha, learned=1, updated_at=CURRENT_TIMESTAMP",
+            (repository, topic, local_path, commit_sha),
+        )
+    return answer
 
 
 def save_memory(note: str) -> None:
@@ -1213,6 +1353,16 @@ def agent_profiles() -> dict[str, Any]:
     return {"workspace": str(WORKSPACE_ROOT), "profiles": profiles}
 
 
+@app.get("/api/agent/roles")
+def agent_roles() -> dict[str, Any]:
+    return {"roles": [{"name": name, **details} for name, details in AGENT_ROLES.items()]}
+
+
+@app.get("/api/capabilities")
+def capabilities() -> dict[str, Any]:
+    return {"capabilities": AGENT_CAPABILITIES, "roles": agent_roles()["roles"]}
+
+
 @app.post("/api/agent/profile/execute")
 def agent_profile_execute(request: AgentProfileExecuteRequest) -> dict[str, Any]:
     profiles = agent_profiles()["profiles"]
@@ -1272,9 +1422,12 @@ def agent_execute(request: AgentExecuteRequest) -> dict[str, Any]:
 
 @app.post("/api/agent/generate")
 def agent_generate(request: AgentGenerateRequest) -> dict[str, Any]:
+    role = request.role if request.role in AGENT_ROLES else "coding"
+    role_focus = AGENT_ROLES[role]["focus"]
     context = workspace_context(request.request)
     prompt = (
-        "Bir yazilim agenti olarak kullanici istegi icin dosya plani ve kod uret. "
+        f"Sen {AGENT_ROLES[role]['title']} rolundeki yazilim agentsin. Odak: {role_focus} "
+        "Kullanici istegi icin dosya plani ve kod uret. "
         "Yalnizca JSON don: {\"summary\": string, \"files\": [{\"path\": string, \"content\": string}], \"tests\": [string]}. "
         "Dosya yollari workspace goreli olsun. Tehlikeli veya workspace disi islem uretme. "
         "Mevcut baglami koru ve test edilebilir kod yaz.\n\n"
@@ -1320,6 +1473,64 @@ def agent_generate(request: AgentGenerateRequest) -> dict[str, Any]:
     return generated
 
 
+@app.post("/api/agent/project")
+def agent_project(request: AgentProjectRequest) -> dict[str, Any]:
+    if not request.request.strip():
+        raise HTTPException(400, "Proje istegi bos olamaz.")
+    role = request.role if request.role in AGENT_ROLES else "coding"
+    if not request.approved:
+        return {
+            "status": "approval_required",
+            "role": role,
+            "project_path": request.project_path or ".",
+            "test_command": request.test_command,
+            "plan": [
+                "Proje gereksinimlerini ve mevcut workspace yapisini incele",
+                "Kaynak, test, README ve konfigurasyon dosyalarini planla",
+                "Dosya diff'lerini ve olusturulacak klasorleri goster",
+                "Onay sonrasi dosyalari backup ile yaz",
+                "Test/compile calistir ve teslim manifesti olustur",
+            ],
+        }
+    generated = agent_generate(AgentGenerateRequest(request=request.request, project_path=request.project_path, role=role))
+    files = generated.get("files", [])
+    if not isinstance(files, list) or not files:
+        raise HTTPException(502, "Proje modeli dosya uretmedi.")
+    validated_files: list[dict[str, str]] = []
+    for item in files:
+        if not isinstance(item, dict) or not isinstance(item.get("path"), str) or not isinstance(item.get("content"), str):
+            raise HTTPException(502, "Proje dosya planinda path/content eksik.")
+        AGENT_TOOLS.safe_path(item["path"])
+        validated_files.append({"path": item["path"], "content": item["content"]})
+    results = [AGENT_TOOLS.write_file(item["path"], item["content"]) for item in validated_files]
+    test_command = request.test_command
+    if not test_command:
+        python_files = [item["path"] for item in validated_files if item["path"].endswith(".py")]
+        test_files = [item["path"] for item in validated_files if Path(item["path"]).name.startswith("test_")]
+        if test_files:
+            test_command = [sys.executable, "-m", "pytest", "-q", *test_files]
+        elif python_files:
+            test_command = [sys.executable, "-m", "py_compile", *python_files]
+    test_result = AGENT_TOOLS.run_approved(test_command, approved=True) if test_command else {"status": "test_skipped", "passed": True}
+    manifest = {
+        "status": "delivered" if test_result.get("passed") else "delivered_with_test_failure",
+        "role": role,
+        "project_path": request.project_path or ".",
+        "summary": generated.get("summary", ""),
+        "files": [{"path": item["path"], "backup": result.get("backup", "")} for item, result in zip(validated_files, results)],
+        "tests": test_result,
+        "requested_tests": generated.get("tests", []),
+    }
+    artifact_dir = ROOT / ".job-artifacts"
+    artifact_dir.mkdir(exist_ok=True)
+    artifact_path = artifact_dir / f"project-delivery-{uuid.uuid4().hex}.json"
+    artifact_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    update_task(request.task_id, approved=1, status=manifest["status"], changed_files=json.dumps([item["path"] for item in validated_files], ensure_ascii=False), tests=json.dumps(test_result, ensure_ascii=False), result=json.dumps(manifest, ensure_ascii=False))
+    journal_operation("project_delivery", f"Role={role}", json.dumps(manifest, ensure_ascii=False))
+    save_memory(f"Proje teslimi: {manifest['status']}, dosya sayisi={len(validated_files)}, artifact={artifact_path}")
+    return {**manifest, "artifact": str(artifact_path)}
+
+
 @app.post("/api/agent/apply")
 def agent_apply(request: AgentApplyRequest) -> dict[str, Any]:
     if not request.files:
@@ -1343,6 +1554,67 @@ def agent_apply(request: AgentApplyRequest) -> dict[str, Any]:
     journal_operation("file_apply", "Kullanici acik onay verdi; workspace backup uygulandi.", f"{len(results)} dosya")
     save_memory(f"Agent dosya uygulama sonucu: {len(results)} dosya yazildi.")
     return {"status": "applied", "files": results}
+
+
+@app.post("/api/agent/self-repair")
+def agent_self_repair(request: SelfRepairRequest) -> dict[str, Any]:
+    if not request.request.strip():
+        raise HTTPException(400, "Self-repair istegi bos olamaz.")
+    role = request.role if request.role in AGENT_ROLES else "coding"
+    attempts = max(1, min(request.max_attempts, 3))
+    if not request.approved:
+        return {
+            "status": "approval_required",
+            "role": role,
+            "attempts": attempts,
+            "test_command": request.test_command,
+            "plan": [
+                "Workspace ve ilgili dosyalari incele",
+                "Role odakli minimal degisikligi uret ve diff hazirla",
+                "Onay sonrasi backup ile uygula",
+                "Testi calistir; basarisizsa ayni slice icinde sinirli tekrar dene",
+                "Sonucu, testleri ve rollback bilgisini kaydet",
+            ],
+        }
+    if request.test_command and request.test_command[0].lower() not in {"python", "py", "pytest", "ruff", "npm", "node"}:
+        raise HTTPException(400, "Self-repair test komutu izinli bir Python/Node araci ile baslamali.")
+    all_results: list[dict[str, object]] = []
+    test_result: dict[str, object] | None = None
+    generation_request = request.request
+    for attempt in range(1, attempts + 1):
+        generated = agent_generate(AgentGenerateRequest(request=generation_request, role=role))
+        files = generated.get("files", [])
+        if not isinstance(files, list) or not files:
+            raise HTTPException(502, "Self-repair modeli uygulanabilir dosya uretmedi.")
+        for item in files:
+            if not isinstance(item, dict) or not isinstance(item.get("path"), str) or not isinstance(item.get("content"), str):
+                raise HTTPException(502, "Self-repair dosya planinda path/content eksik.")
+        for item in files:
+            all_results.append(AGENT_TOOLS.write_file(item["path"], item["content"]))
+        if not request.test_command:
+            test_result = {"passed": True, "status": "test_skipped", "reason": "Test komutu verilmedi."}
+            break
+        test_result = AGENT_TOOLS.run_approved(request.test_command, approved=True)
+        if test_result.get("passed"):
+            break
+        generation_request = (
+            f"{request.request}\n\nSelf-repair attempt {attempt} failed validation. "
+            f"Test output:\n{test_result.get('stdout', '')}\n{test_result.get('stderr', '')}\n"
+            "Inspect the same slice, correct the failure, and return only the complete replacement files."
+        )
+    status = "completed" if test_result and test_result.get("passed") else "failed_validation"
+    payload = {"status": status, "role": role, "attempts_used": attempt, "files": all_results, "test": test_result}
+    update_task(
+        request.task_id,
+        approved=1,
+        status=status,
+        changed_files=json.dumps([item.get("path") for item in all_results], ensure_ascii=False),
+        tests=json.dumps(test_result or {}, ensure_ascii=False),
+        result=json.dumps(all_results, ensure_ascii=False),
+    )
+    journal_operation("self_repair", f"Role={role}, attempts={attempt}", json.dumps(payload, ensure_ascii=False))
+    save_memory(f"Self-repair sonucu: role={role}, status={status}, attempts={attempt}")
+    return payload
 
 
 @app.post("/api/agent/rollback")
@@ -1439,7 +1711,12 @@ def chat(request: ChatRequest) -> dict[str, str]:
                 "- Notlari, arastirma sonuclarini ve islemleri memory.db icindeki kalici hafizaya kaydedebilirim.\n"
                 "- PDF, metin, gorsel, ses/video ve public web/GitHub kaynaklarini analiz edebilirim.\n"
                 "- Proje plani, kod, test ve dosya degisikligi uretebilirim.\n\n"
-                "Sinirlarim: workspace disina yazamam, onaysiz komut veya dosya degisikligi yapmam, gizli ic dusunme taslagimi gostermem."
+                "- GitHub topic'lerinden public repository listesi cikarabilir, onayli shallow clone yapabilir, README/kod kaynaklarini Qwen ile ogrenip memory.db'ye kaydedebilirim.\n"
+                "- Anlik durum paneliyle sohbet, arastirma, dosya, GitHub, media, test ve kurulum islemlerinin durumunu gosterebilirim.\n"
+                "- Self-audit, test sonucu, provenance artifact, backup ve rollback akislariyla kontrollu duzeltme yapabilirim.\n\n"
+                "Sinirlarim: Okuma ve onayli yazma ALLOW_EXTERNAL_PATHS politikasina tabidir; Windows, Program Files ve ProgramData korumali klasorlerdir. "
+                "Dosya yazma, silme, paket kurma ve komut calistirma acik onay ister. Public web/GitHub icin internet gerekir; private/login sayfalarda sifre, MFA, cookie veya token istemem. "
+                "Gizli ic dusunme taslagimi gostermem."
             ),
             "intent": "capabilities",
         }
@@ -1448,7 +1725,12 @@ def chat(request: ChatRequest) -> dict[str, str]:
     if request.memory:
         context_parts.append("Retrieved kalici hafiza:\n" + (retrieved_memory_context(message) or "Yok"))
         context_parts.append("Onceki operasyonlar:\n" + (operation_context() or "Yok"))
-    context_parts.append("Workspace baglami:\n" + (workspace_context(message) or "Yok"))
+    workspace_markers = (
+        "workspace", "proje", "projede", "dosya", "kod", "hata", "uygulama",
+        "test", "localqwenagent", "deeppanda", "script", "klasor",
+    )
+    if decision.intent == "action_request" or any(marker in message.lower() for marker in workspace_markers):
+        context_parts.append("Workspace baglami:\n" + (workspace_context(message) or "Yok"))
     system = system_prompt(decision, "\n\n".join(context_parts))
     if any(marker in message.lower() for marker in ("ayrıntı", "ayrinti", "detay", "adım adım", "adim adim", "nedenini")):
         system += "\nKullanici ayrinti istedi: sonucu, gerekceleri, varsayimlari ve uygulanabilir adimlari ayrintili anlat; gizli ic dusunme taslagini yazma."
@@ -1610,6 +1892,45 @@ def github_research(request: GitHubResearchRequest) -> dict[str, str]:
     if errors:
         answer += "\n\nOkunamayan kaynaklar:\n" + "\n".join(errors)
     return {"content": answer, "memory": "GitHub ogrenme notu kalici hafizaya kaydedildi."}
+
+
+@app.post("/api/github/topic/research")
+def github_topic_research(request: GitHubTopicResearchRequest) -> dict[str, Any]:
+    try:
+        repositories = github_topic_repositories(request.topic_url, request.limit)
+    except (HTTPError, URLError, ValueError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if not repositories:
+        raise HTTPException(404, "Topic icinde public repository bulunamadi.")
+    if request.download and not request.approved:
+        return {"status": "approval_required", "repositories": repositories, "destination": request.destination}
+    learned: list[dict[str, str]] = []
+    for repository in repositories:
+        local_path = ""
+        if request.download:
+            repo_name = repository.rstrip("/").split("/")[-1]
+            local_path = str(AGENT_TOOLS.safe_path(str(Path(request.destination) / repo_name)))
+            if Path(local_path).exists():
+                raise HTTPException(409, f"Hedef zaten var: {local_path}")
+            result = AGENT_TOOLS.run_approved(["git", "clone", "--depth", "1", repository, local_path], approved=True)
+            if not result.get("passed"):
+                raise HTTPException(502, f"Repo indirilemedi: {repository}\n{result.get('stderr', '')}")
+        try:
+            answer = learn_repository(repository, request.topic_url, request.question, local_path)
+        except Exception as exc:
+            raise HTTPException(502, f"Repo ogrenilemedi: {repository}: {exc}") from exc
+        learned.append({"repository": repository, "local_path": local_path, "summary": answer[:2000]})
+    return {"status": "completed", "topic": request.topic_url, "repositories": learned, "memory": "Kaynaklar kalici hafizaya kaydedildi."}
+
+
+@app.get("/api/github/repositories")
+def github_repositories() -> dict[str, Any]:
+    with db() as connection:
+        rows = connection.execute(
+            "SELECT repository, topic, local_path, commit_sha, learned, created_at, updated_at FROM library_repositories ORDER BY updated_at DESC"
+        ).fetchall()
+    fields = ("repository", "topic", "local_path", "commit_sha", "learned", "created_at", "updated_at")
+    return {"repositories": [dict(zip(fields, row)) for row in rows]}
 
 
 @app.post("/api/tools/run")

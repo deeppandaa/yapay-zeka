@@ -1,0 +1,1 @@
+Review the proposed patch as a senior maintainer. Check behavior, API compatibility, security boundaries, and test coverage. Choose the narrowest executable validation that can falsify the patch. Do not expand the task unnecessarily.

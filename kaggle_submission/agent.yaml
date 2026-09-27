@@ -1,0 +1,22 @@
+# Gemma 4 Developer Agent submission configuration.
+# The competition harness provides the model and sandbox tools.
+name: deeppanda_coding_agent
+agent_class: LlmAgent
+model: gemma-4-31b-it-qat-w4a16-ct
+description: >-
+  A safety-aware software engineering agent that navigates repositories,
+  proposes minimal patches, validates them with tests, and reports evidence.
+instruction: !include prompts/system.md
+tools:
+  - name: read_file
+  - name: edit_file
+  - name: write_file
+  - name: run_command
+  - name: get_status
+  - name: submit_patch
+  - name: get_code_neighbors
+  - name: search_similar_code
+  - name: get_code_subgraph
+sub_agents:
+  - config_path: sub_agents/code_analyzer.yaml
+  - config_path: sub_agents/test_reviewer.yaml
