@@ -58,6 +58,7 @@ OLLAMA_TIMEOUT_SECONDS = int(os.getenv("OLLAMA_TIMEOUT_SECONDS", "600"))
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_MB", "50")) * 1024 * 1024
 IMAGE_MODEL_PATH = Path(os.getenv("IMAGE_MODEL_PATH", r"D:\DeepPanda-Proje\AI-Models\tiny-sd"))
 VIDEO_MODEL_PATH = Path(os.getenv("VIDEO_MODEL_PATH", r"D:\DeepPanda-Proje\AI-Models\text-to-video-ms-1.7b"))
+PIPER_MODEL_PATH = Path(os.getenv("PIPER_MODEL_PATH", r"D:\DeepPanda-Proje\AI-Models\piper-voices\tr_TR-dfki-medium\tr_TR-dfki-medium.onnx"))
 INSTAGRAM_GRAPH_VERSION = os.getenv("INSTAGRAM_GRAPH_VERSION", "v23.0")
 INSTAGRAM_ACCESS_TOKEN = os.getenv("INSTAGRAM_ACCESS_TOKEN", "")
 INSTAGRAM_USER_ID = os.getenv("INSTAGRAM_USER_ID", "")
@@ -77,6 +78,8 @@ IMAGE_PIPELINE: Any = None
 IMAGE_PIPELINE_LOCK = threading.Lock()
 VIDEO_PIPELINE: Any = None
 VIDEO_PIPELINE_LOCK = threading.Lock()
+PIPER_VOICE: Any = None
+PIPER_VOICE_LOCK = threading.Lock()
 
 
 class ChatRequest(BaseModel):
@@ -245,6 +248,10 @@ class ImageGenerateRequest(BaseModel):
 class VideoGenerateRequest(BaseModel):
     prompt: str
     duration_seconds: float = 3
+
+
+class TTSRequest(BaseModel):
+    text: str
 
 
 class VideoEditRequest(BaseModel):
@@ -934,6 +941,7 @@ def runtime_status() -> dict[str, Any]:
         "local": {
             "chat": True,
             "tts": True,
+            "neural_tts": PIPER_MODEL_PATH.is_file(),
             "workspace": True,
             "image_generation": IMAGE_MODEL_PATH.is_dir(),
             "video_generation": IMAGE_MODEL_PATH.is_dir() and shutil.which("ffmpeg") is not None,
@@ -1384,6 +1392,34 @@ def download_asset(asset_id: int) -> FileResponse:
     if not path.is_file():
         raise HTTPException(410, "Asset dosyasi artik mevcut degil.")
     return FileResponse(path, media_type=row[1] or None, filename=path.name)
+
+
+@app.post("/api/tts")
+def synthesize_tts(request: TTSRequest) -> FileResponse:
+    """Synthesize Turkish speech locally with the configured Piper voice."""
+    global PIPER_VOICE
+    text = request.text.strip()
+    if not text or len(text) > 20_000:
+        raise HTTPException(400, "TTS metni 1-20000 karakter olmali.")
+    if not PIPER_MODEL_PATH.is_file():
+        raise HTTPException(503, f"Piper ses modeli bulunamadi: {PIPER_MODEL_PATH}")
+    try:
+        import wave
+
+        from piper import PiperVoice
+
+        with PIPER_VOICE_LOCK:
+            if PIPER_VOICE is None:
+                PIPER_VOICE = PiperVoice.load(str(PIPER_MODEL_PATH))
+            output_dir = ROOT / ".asset-store" / "generated"
+            output_dir.mkdir(parents=True, exist_ok=True)
+            output = output_dir / f"localqwen_tts_{uuid.uuid4().hex}.wav"
+            with wave.open(str(output), "wb") as wav_file:
+                PIPER_VOICE.synthesize_wav(text, wav_file)
+        register_asset(output, "audio", "audio/wav", source="generated", metadata={"text_length": len(text), "voice": PIPER_MODEL_PATH.stem})
+        return FileResponse(output, media_type="audio/wav", filename="localqwen_tts.wav")
+    except Exception as exc:
+        raise HTTPException(503, f"Yerel TTS basarisiz: {exc}") from exc
 
 
 @app.get("/v1/models")
