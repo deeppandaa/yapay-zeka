@@ -287,7 +287,7 @@ AGENT_CAPABILITIES: list[dict[str, str]] = [
     {"id": "self_repair", "title": "Sinirli self-repair", "description": "Audit, role odakli duzeltme, test ve en fazla uc deneme."},
     {"id": "github_learning", "title": "GitHub topic ve repo ogrenme", "description": "Public repo listeleme, shallow clone, commit ve kalici hafiza."},
     {"id": "deep_learning", "title": "Derin ogrenme pipeline", "description": "WSL CUDA, PyTorch, Transformers, PEFT, dataset ve metrik plani."},
-    {"id": "media", "title": "Belge ve medya analizi", "description": "PDF, ofis belgeleri, gorsel, ses/video, OCR ve Whisper."},
+    {"id": "media", "title": "Belge ve medya analizi/uretimi", "description": "PDF, ofis belgeleri, asset katalogu, gorsel, gerçek text-to-video, ses/video, OCR ve Whisper."},
     {"id": "research", "title": "Public web/GitHub arastirmasi", "description": "Kaynak URL takibi ve kaynakli ogrenme notlari."},
     {"id": "observability", "title": "Anlik durum ve provenance", "description": "UI durum paneli, journal, evaluation artifact ve kaynak hashleri."},
 ]
