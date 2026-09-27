@@ -69,6 +69,8 @@ app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 AGENT_TOOLS = AgentTools(WORKSPACE_ROOT)
 RESEARCH_JOBS: dict[str, dict[str, Any]] = {}
 RESEARCH_LOCK = threading.Lock()
+BROWSER_SESSIONS: dict[str, dict[str, Any]] = {}
+BROWSER_SESSION_LOCK = threading.Lock()
 IMAGE_PIPELINE: Any = None
 IMAGE_PIPELINE_LOCK = threading.Lock()
 VIDEO_PIPELINE: Any = None
@@ -120,6 +122,20 @@ class BrowserRequest(BaseModel):
 class BrowserActionRequest(BaseModel):
     url: str
     action: str
+    selector: str = ""
+    value: str = ""
+    approved: bool = False
+
+
+class BrowserSessionStartRequest(BaseModel):
+    profile_dir: str = ""
+    approved: bool = False
+
+
+class BrowserSessionActionRequest(BaseModel):
+    session_id: str
+    url: str = ""
+    action: str = "inspect"
     selector: str = ""
     value: str = ""
     approved: bool = False
@@ -244,6 +260,12 @@ class InstagramImagePublishRequest(BaseModel):
 class InstagramVideoPublishRequest(BaseModel):
     video_url: str
     caption: str = ""
+    approved: bool = False
+
+
+class InstagramMessageRequest(BaseModel):
+    recipient_id: str
+    text: str
     approved: bool = False
 
 
@@ -2052,6 +2074,71 @@ async def browser_action(request: BrowserActionRequest) -> dict[str, Any]:
         raise HTTPException(502, f"Browser action başarısız: {exc}") from exc
 
 
+@app.post("/api/browser/session/start")
+async def browser_session_start(request: BrowserSessionStartRequest) -> dict[str, Any]:
+    """Open a user-approved persistent browser profile without exposing cookies."""
+    if not request.approved:
+        return {"status": "approval_required", "profile_dir": request.profile_dir or "user-profile-browser"}
+    try:
+        from playwright.async_api import async_playwright
+        profile = Path(request.profile_dir or (Path.home() / ".localqwen-browser-profile")).expanduser().resolve()
+        user_root = Path(os.environ.get("USERPROFILE", str(Path.home()))).resolve()
+        if user_root not in profile.parents and WORKSPACE_ROOT not in profile.parents:
+            raise HTTPException(400, "Browser profili kullanici profili veya workspace altinda olmali.")
+        playwright = await async_playwright().start()
+        context = await playwright.chromium.launch_persistent_context(str(profile), headless=False)
+        page = context.pages[0] if context.pages else await context.new_page()
+        session_id = uuid.uuid4().hex
+        with BROWSER_SESSION_LOCK:
+            BROWSER_SESSIONS[session_id] = {"playwright": playwright, "context": context, "page": page, "profile": str(profile)}
+        return {"status": "started", "session_id": session_id, "profile": str(profile), "message": "Tarayici acildi; girisi kullanici kendi penceresinde yapabilir."}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(503, f"Kalici browser oturumu baslatilamadi: {exc}") from exc
+
+
+@app.post("/api/browser/session/action")
+async def browser_session_action(request: BrowserSessionActionRequest) -> dict[str, Any]:
+    with BROWSER_SESSION_LOCK:
+        session = BROWSER_SESSIONS.get(request.session_id)
+    if not session:
+        raise HTTPException(404, "Browser oturumu bulunamadi.")
+    if request.action in {"click", "fill", "select"} and not request.approved:
+        return {"status": "approval_required", "action": request.action, "selector": request.selector}
+    if request.action not in {"inspect", "goto", "click", "fill", "select"}:
+        raise HTTPException(400, "Gecersiz browser session action.")
+    try:
+        page = session["page"]
+        if request.url:
+            parsed = urlparse(request.url)
+            if parsed.scheme not in {"http", "https"}:
+                raise HTTPException(400, "Yalnizca http/https URL kullanilabilir.")
+            await page.goto(request.url, wait_until="domcontentloaded", timeout=30_000)
+        if request.action == "click":
+            await page.locator(request.selector).first.click(timeout=10_000)
+        elif request.action == "fill":
+            await page.locator(request.selector).first.fill(request.value)
+        elif request.action == "select":
+            await page.locator(request.selector).first.select_option(request.value)
+        return {"status": "completed", "url": page.url, "title": await page.title(), "content": (await page.locator("body").inner_text())[:40_000]}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(502, f"Kalici browser action basarisiz: {exc}") from exc
+
+
+@app.post("/api/browser/session/close")
+async def browser_session_close(request: BrowserSessionActionRequest) -> dict[str, str]:
+    with BROWSER_SESSION_LOCK:
+        session = BROWSER_SESSIONS.pop(request.session_id, None)
+    if not session:
+        raise HTTPException(404, "Browser oturumu bulunamadi.")
+    await session["context"].close()
+    await session["playwright"].stop()
+    return {"status": "closed"}
+
+
 @app.post("/api/github/research")
 def github_research(request: GitHubResearchRequest) -> dict[str, str]:
     question = request.question.strip()
@@ -2515,6 +2602,31 @@ def publish_instagram_video(request: InstagramVideoPublishRequest) -> dict[str, 
     except HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
         raise HTTPException(502, f"Instagram Graph API hatasi: {detail[:1000]}") from exc
+    except (URLError, json.JSONDecodeError) as exc:
+        raise HTTPException(502, f"Instagram Graph API baglantisi basarisiz: {exc}") from exc
+
+
+@app.post("/api/instagram/message/send")
+def send_instagram_message(request: InstagramMessageRequest) -> dict[str, Any]:
+    """Send a message only when the account/app has the required Instagram permissions."""
+    if not request.approved:
+        return {"status": "approval_required", "recipient_id": request.recipient_id, "text": request.text[:500]}
+    if not request.recipient_id.strip() or not request.text.strip():
+        raise HTTPException(400, "recipient_id ve text gerekli.")
+    if not INSTAGRAM_ACCESS_TOKEN or not INSTAGRAM_USER_ID:
+        raise HTTPException(503, "INSTAGRAM_ACCESS_TOKEN ve INSTAGRAM_USER_ID ayarlanmis olmali.")
+    endpoint = f"https://graph.facebook.com/{INSTAGRAM_GRAPH_VERSION}/{INSTAGRAM_USER_ID}/messages"
+    payload = urlencode({
+        "recipient": json.dumps({"id": request.recipient_id}),
+        "message": json.dumps({"text": request.text[:2_000]}, ensure_ascii=False),
+        "access_token": INSTAGRAM_ACCESS_TOKEN,
+    }).encode()
+    try:
+        with urlopen(Request(endpoint, data=payload, method="POST"), timeout=30) as response:
+            return {"status": "sent", "response": json.loads(response.read().decode("utf-8"))}
+    except HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise HTTPException(502, f"Instagram mesaj API izni veya istegi basarisiz: {detail[:1000]}") from exc
     except (URLError, json.JSONDecodeError) as exc:
         raise HTTPException(502, f"Instagram Graph API baglantisi basarisiz: {exc}") from exc
 
