@@ -76,6 +76,15 @@ Ollama models are kept in the runtime store under `Yapay Zeka\AI-Runtimes\Ollama
 
 The agent does not silently execute commands or install packages. Commands require explicit approval, and writes are restricted to `WORKSPACE_ROOT` with backups.
 
+## Instagram Graph API
+
+Image publishing is available through `POST /api/instagram/image/publish`. Set `INSTAGRAM_ACCESS_TOKEN`, `INSTAGRAM_USER_ID`, and optionally `INSTAGRAM_GRAPH_VERSION` in the local `.env`; never commit these values. The request must include `approved=true`, and `image_url` must be a public HTTPS image URL because Instagram fetches the media itself.
+
+```powershell
+$body = @{ image_url = "https://public.example/image.jpg"; caption = "Yerel agent ile hazırlandı"; approved = $true } | ConvertTo-Json
+Invoke-RestMethod http://127.0.0.1:8787/api/instagram/image/publish -Method Post -ContentType "application/json" -Body $body
+```
+
 Workspace içindeki dosya ve klasörler onaysız okunabilir. `.env` içindeki `ALLOW_EXTERNAL_PATHS=on` ile workspace dışı yollar da okunabilir ve onay sonrası yazılabilir; Windows, Program Files ve ProgramData gibi korunan sistem klasörleri engellidir. Yazma, silme, paket kurulumu ve komut çalıştırma ayrı açık onay gerektirir. İşletim sisteminin tamamına sınırsız okuma/yazma yetkisi verilmez.
 
 ## Oturum ve özel sayfalar

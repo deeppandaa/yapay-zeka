@@ -22,7 +22,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 
 from docx import Document
@@ -56,6 +56,9 @@ CONTINUE_MODEL = os.getenv("CONTINUE_MODEL", OLLAMA_CODE_MODEL)
 OLLAMA_TIMEOUT_SECONDS = int(os.getenv("OLLAMA_TIMEOUT_SECONDS", "600"))
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_MB", "50")) * 1024 * 1024
 IMAGE_MODEL_PATH = Path(os.getenv("IMAGE_MODEL_PATH", r"D:\DeepPanda-Proje\AI-Models\tiny-sd"))
+INSTAGRAM_GRAPH_VERSION = os.getenv("INSTAGRAM_GRAPH_VERSION", "v23.0")
+INSTAGRAM_ACCESS_TOKEN = os.getenv("INSTAGRAM_ACCESS_TOKEN", "")
+INSTAGRAM_USER_ID = os.getenv("INSTAGRAM_USER_ID", "")
 AGENT_DEV_MODE = os.getenv("AGENT_DEV_MODE", "off").strip().lower()
 REQUIRE_MEMORY_APPROVAL = os.getenv("REQUIRE_MEMORY_APPROVAL", "off").strip().lower() in {"1", "true", "yes", "on"}
 
@@ -203,6 +206,12 @@ class VideoEditRequest(BaseModel):
     start_seconds: float = 0
     duration_seconds: float = 10
     output_format: str = "mp4"
+
+
+class InstagramImagePublishRequest(BaseModel):
+    image_url: str
+    caption: str = ""
+    approved: bool = False
 
 
 class OpenAIChatRequest(BaseModel):
@@ -2142,6 +2151,38 @@ async def edit_video(
         shutil.rmtree(directory, ignore_errors=True)
         raise HTTPException(422, f"Video duzenleme basarisiz: {exc}") from exc
     return FileResponse(output, media_type=f"video/{output_format}", filename=f"localqwen_edited.{output_format}", background=BackgroundTask(shutil.rmtree, directory, ignore_errors=True))
+
+@app.post("/api/instagram/image/publish")
+def publish_instagram_image(request: InstagramImagePublishRequest) -> dict[str, Any]:
+    """Publish a public image through Instagram Graph API after explicit approval."""
+    if not request.approved:
+        return {"status": "approval_required", "image_url": request.image_url, "caption": request.caption}
+    parsed = urlparse(request.image_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise HTTPException(400, "image_url public bir http(s) URL olmali.")
+    if not INSTAGRAM_ACCESS_TOKEN or not INSTAGRAM_USER_ID:
+        raise HTTPException(503, "INSTAGRAM_ACCESS_TOKEN ve INSTAGRAM_USER_ID ayarlanmis olmali.")
+    base = f"https://graph.facebook.com/{INSTAGRAM_GRAPH_VERSION}/{INSTAGRAM_USER_ID}"
+    try:
+        container_data = urlencode({
+            "image_url": request.image_url,
+            "caption": request.caption[:2_200],
+            "access_token": INSTAGRAM_ACCESS_TOKEN,
+        }).encode()
+        with urlopen(Request(f"{base}/media", data=container_data, method="POST"), timeout=30) as response:
+            container = json.loads(response.read().decode("utf-8"))
+        creation_id = container.get("id")
+        if not creation_id:
+            raise HTTPException(502, f"Instagram medya kapsayicisi olusturulamadi: {container}")
+        publish_data = urlencode({"creation_id": creation_id, "access_token": INSTAGRAM_ACCESS_TOKEN}).encode()
+        with urlopen(Request(f"{base}/media_publish", data=publish_data, method="POST"), timeout=30) as response:
+            published = json.loads(response.read().decode("utf-8"))
+        return {"status": "published", "container": container, "published": published}
+    except HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise HTTPException(502, f"Instagram Graph API hatasi: {detail[:1000]}") from exc
+    except (URLError, json.JSONDecodeError) as exc:
+        raise HTTPException(502, f"Instagram Graph API baglantisi basarisiz: {exc}") from exc
 
 
 @app.post("/api/memory")
