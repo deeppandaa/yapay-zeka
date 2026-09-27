@@ -57,6 +57,7 @@ CONTINUE_MODEL = os.getenv("CONTINUE_MODEL", OLLAMA_CODE_MODEL)
 OLLAMA_TIMEOUT_SECONDS = int(os.getenv("OLLAMA_TIMEOUT_SECONDS", "600"))
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_MB", "50")) * 1024 * 1024
 IMAGE_MODEL_PATH = Path(os.getenv("IMAGE_MODEL_PATH", r"D:\DeepPanda-Proje\AI-Models\tiny-sd"))
+VIDEO_MODEL_PATH = Path(os.getenv("VIDEO_MODEL_PATH", r"D:\DeepPanda-Proje\AI-Models\text-to-video-ms-1.7b"))
 INSTAGRAM_GRAPH_VERSION = os.getenv("INSTAGRAM_GRAPH_VERSION", "v23.0")
 INSTAGRAM_ACCESS_TOKEN = os.getenv("INSTAGRAM_ACCESS_TOKEN", "")
 INSTAGRAM_USER_ID = os.getenv("INSTAGRAM_USER_ID", "")
@@ -70,6 +71,8 @@ RESEARCH_JOBS: dict[str, dict[str, Any]] = {}
 RESEARCH_LOCK = threading.Lock()
 IMAGE_PIPELINE: Any = None
 IMAGE_PIPELINE_LOCK = threading.Lock()
+VIDEO_PIPELINE: Any = None
+VIDEO_PIPELINE_LOCK = threading.Lock()
 
 
 class ChatRequest(BaseModel):
@@ -124,6 +127,16 @@ class BrowserActionRequest(BaseModel):
 
 class ToolRequest(BaseModel):
     command: list[str]
+    approved: bool = False
+
+
+class ShortcutRequest(BaseModel):
+    action: str = "create"
+    path: str
+    target: str = ""
+    arguments: str = ""
+    working_directory: str = ""
+    description: str = ""
     approved: bool = False
 
 
@@ -894,6 +907,7 @@ def runtime_status() -> dict[str, Any]:
             "workspace": True,
             "image_generation": IMAGE_MODEL_PATH.is_dir(),
             "video_generation": IMAGE_MODEL_PATH.is_dir() and shutil.which("ffmpeg") is not None,
+            "real_video_generation": VIDEO_MODEL_PATH.is_dir(),
             "gpu": {"available": gpu_available, "name": gpu_name},
         },
         "online": {
@@ -2107,6 +2121,50 @@ def run_tool(request: ToolRequest) -> dict[str, object]:
         raise HTTPException(400, str(exc)) from exc
 
 
+@app.post("/api/tools/shortcut")
+def manage_shortcut(request: ShortcutRequest) -> dict[str, Any]:
+    """Create, update, or run an approved user-profile Windows shortcut."""
+    if not request.approved:
+        return {"status": "approval_required", "action": request.action, "path": request.path}
+    if sys.platform != "win32":
+        raise HTTPException(400, "Windows .lnk islemleri yalnizca Windows'ta desteklenir.")
+    if request.action not in {"create", "run"}:
+        raise HTTPException(400, "action create veya run olmali.")
+    shortcut_path = Path(request.path).expanduser().resolve()
+    user_root = Path(os.environ.get("USERPROFILE", str(Path.home()))).resolve()
+    if shortcut_path.suffix.lower() != ".lnk" or (user_root not in shortcut_path.parents and WORKSPACE_ROOT not in shortcut_path.parents):
+        raise HTTPException(400, "Kisayol yolu kullanici profili veya workspace altinda bir .lnk olmali.")
+    if AGENT_TOOLS._is_protected_path(shortcut_path):
+        raise HTTPException(403, "Korunan Windows klasorlerinde kisayol islemi engellendi.")
+    if request.action == "create" and not request.target.strip():
+        raise HTTPException(400, "Kisayol hedefi gerekli.")
+    payload = json.dumps({
+        "action": request.action,
+        "path": str(shortcut_path),
+        "target": request.target,
+        "arguments": request.arguments,
+        "working_directory": request.working_directory,
+        "description": request.description,
+    }, ensure_ascii=False).encode("utf-8")
+    encoded = base64.b64encode(payload).decode("ascii")
+    script = (
+        "$json=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('" + encoded + "'))|ConvertFrom-Json; "
+        "$shell=New-Object -ComObject WScript.Shell; "
+        "if($json.action -eq 'create'){ $shortcut=$shell.CreateShortcut($json.path); "
+        "$shortcut.TargetPath=$json.target; $shortcut.Arguments=$json.arguments; "
+        "$shortcut.WorkingDirectory=$json.working_directory; $shortcut.Description=$json.description; "
+        "$shortcut.Save(); Write-Output 'created' } else { Start-Process -FilePath $json.path; Write-Output 'started' }"
+    )
+    try:
+        result = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script], capture_output=True, text=True, timeout=30, check=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise HTTPException(500, f"Kisayol islemi basarisiz: {exc}") from exc
+    if result.returncode:
+        raise HTTPException(422, f"Kisayol islemi basarisiz: {result.stderr[-2000:]}")
+    journal_operation("shortcut", "Kullanici kisayol islemini acikca onayladi.", json.dumps({"action": request.action, "path": str(shortcut_path)}, ensure_ascii=False))
+    return {"status": request.action + "d", "path": str(shortcut_path), "output": result.stdout.strip()}
+
+
 @app.get("/api/tools/file")
 def read_tool_file(path: str) -> dict[str, str]:
     if AGENT_DEV_MODE != "workspace":
@@ -2239,7 +2297,7 @@ def generate_image(request: ImageGenerateRequest) -> FileResponse:
 
 @app.post("/api/media/video")
 def generate_video(request: VideoGenerateRequest) -> FileResponse:
-    """Create a short offline MP4 with a generated image and gentle motion."""
+    """Create a real local video when available, with an image-motion fallback."""
     global IMAGE_PIPELINE
     prompt = request.prompt.strip()
     if not prompt or len(prompt) > 2_000:
@@ -2247,6 +2305,34 @@ def generate_video(request: VideoGenerateRequest) -> FileResponse:
     duration = max(1, min(request.duration_seconds, 10))
     if not IMAGE_MODEL_PATH.is_dir():
         raise HTTPException(503, f"Gorsel modeli bulunamadi: {IMAGE_MODEL_PATH}")
+    backend = os.getenv("VIDEO_BACKEND", "auto").strip().lower()
+    if backend in {"auto", "real"} and VIDEO_MODEL_PATH.is_dir():
+        try:
+            import imageio.v2 as imageio
+            import torch
+            from diffusers import TextToVideoSDPipeline
+
+            global VIDEO_PIPELINE
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            dtype = torch.float16 if device == "cuda" else torch.float32
+            with VIDEO_PIPELINE_LOCK:
+                if VIDEO_PIPELINE is None:
+                    VIDEO_PIPELINE = TextToVideoSDPipeline.from_pretrained(str(VIDEO_MODEL_PATH), local_files_only=True, dtype=dtype)
+                    if device == "cuda":
+                        VIDEO_PIPELINE.enable_model_cpu_offload()
+                    else:
+                        VIDEO_PIPELINE.to(device)
+                frame_count = max(8, min(16, round(duration * 8)))
+                frames = VIDEO_PIPELINE(prompt, num_frames=frame_count, num_inference_steps=4).frames[0]
+            output_dir = ROOT / ".asset-store" / "generated"
+            output_dir.mkdir(parents=True, exist_ok=True)
+            output = output_dir / f"localqwen_real_video_{uuid.uuid4().hex}.mp4"
+            imageio.mimsave(output, frames, fps=8, codec="libx264")
+            register_asset(output, "video", "video/mp4", source="generated", metadata={"prompt": prompt, "duration_seconds": duration, "backend": "text-to-video-ms-1.7b"})
+            return FileResponse(output, media_type="video/mp4", filename="localqwen_generated.mp4")
+        except Exception as exc:
+            if backend == "real":
+                raise HTTPException(503, f"Gercek video modeli basarisiz: {exc}") from exc
     directory = Path(tempfile.mkdtemp(prefix="localqwen_video_gen_"))
     image_path = directory / "frame.png"
     output = directory / "generated.mp4"

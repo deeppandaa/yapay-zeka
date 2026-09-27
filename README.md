@@ -93,6 +93,8 @@ Workspace içindeki dosya ve klasörler onaysız okunabilir. `.env` içindeki `A
 
 Public sayfalarda sınırlı tarayıcı eylemleri için `/api/browser/action` kullanılabilir: `goto`, `click`, `fill` ve `select`. `click`, `fill` ve `select` işlemleri `approved=true` ister. Yerel komutlar için `/api/tools/run` aynı onay kuralını ve izinli araç listesini kullanır; shell metni veya keyfi JavaScript çalıştırılmaz.
 
+Windows kısayolları için `/api/tools/shortcut` kullanılabilir. `create` ve `run` işlemleri `approved=true` ister; yalnız kullanıcı profili veya workspace altındaki `.lnk` yollarına izin verilir. Sistem korumalı klasörleri engellenir. Gerçek text-to-video modeli `VIDEO_MODEL_PATH` ile, fallback davranışı `VIDEO_BACKEND=auto|real` ile seçilebilir.
+
 ## GitHub topic öğrenme
 
 Public topic depolarını listelemek için `POST /api/github/topic/research` endpoint'ine `download=false` gönderin. `download=true` yalnızca `approved=true` ile shallow clone yapar; README ve public kaynaklar Qwen tarafından analiz edilir. Öğrenme notu `memory.db` içine, repo ve commit SHA bilgisi `library_repositories` tablosuna yazılır. Kayıtları `GET /api/github/repositories` ile görebilirsiniz.
