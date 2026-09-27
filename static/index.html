@@ -15,6 +15,9 @@
     #chat { min-height:520px; max-height:62vh; overflow:auto; display:flex; flex-direction:column; gap:12px; }
     .msg { padding:12px 14px; border-radius:10px; white-space:pre-wrap; line-height:1.45; }
     .user { background:#145c61; align-self:flex-end; max-width:85%; } .assistant { background:#243c4c; max-width:92%; }
+    .msg-actions { display:flex; gap:6px; margin-top:9px; }
+    .msg-actions button { padding:5px 9px; font-size:12px; background:#31596b; }
+    .msg-actions button:hover { background:#40758a; }
     textarea, input { width:100%; box-sizing:border-box; background:#0f1b23; color:#fff; border:1px solid #3d5868; border-radius:8px; padding:11px; }
     textarea { min-height:90px; resize:vertical; } button { border:0; border-radius:8px; padding:11px 15px; cursor:pointer; color:#fff; background:#087f8c; }
     button:hover { background:#0aa6b5; } .row { display:flex; gap:8px; margin-top:10px; } .row button { flex:1; }
@@ -56,7 +59,9 @@
 </main>
 <script>
 const chat = document.querySelector('#chat'); const message = document.querySelector('#message');
-function add(role, text){ const el=document.createElement('div'); el.className=`msg ${role}`; el.textContent=text; chat.appendChild(el); chat.scrollTop=chat.scrollHeight; }
+function stopSpeech(){ if('speechSynthesis' in window) window.speechSynthesis.cancel(); document.querySelectorAll('.speak-stop').forEach(button=>button.hidden=true); document.querySelectorAll('.speak-start').forEach(button=>button.hidden=false); }
+function speak(text, startButton, stopButton){ if(!('speechSynthesis' in window)){ startButton.textContent='Ses desteklenmiyor'; startButton.disabled=true; return; } stopSpeech(); const utterance=new SpeechSynthesisUtterance(text); utterance.lang='tr-TR'; startButton.hidden=true; stopButton.hidden=false; utterance.onend=()=>{startButton.hidden=false; stopButton.hidden=true;}; utterance.onerror=()=>{startButton.hidden=false; stopButton.hidden=true;}; window.speechSynthesis.speak(utterance); }
+function add(role, text){ const el=document.createElement('div'); el.className=`msg ${role}`; const content=document.createElement('div'); content.textContent=text; el.appendChild(content); if(role==='assistant'&&text.trim()){ const actions=document.createElement('div'); actions.className='msg-actions'; const startButton=document.createElement('button'); startButton.className='speak-start'; startButton.type='button'; startButton.textContent='Sesli oku'; const stopButton=document.createElement('button'); stopButton.className='speak-stop'; stopButton.type='button'; stopButton.textContent='Durdur'; stopButton.hidden=true; startButton.onclick=()=>speak(text,startButton,stopButton); stopButton.onclick=stopSpeech; actions.append(startButton,stopButton); el.appendChild(actions); } chat.appendChild(el); chat.scrollTop=chat.scrollHeight; }
 function setActivity(text){ document.querySelector('#activity-status').textContent=text; document.querySelector('#activity-time').textContent='Son güncelleme: '+new Date().toLocaleTimeString('tr-TR'); }
 async function json(url, options){ const r=await fetch(url, options); const body=await r.text(); let data; try{data=body?JSON.parse(body):{};}catch{throw new Error(`HTTP ${r.status}: ${body.trim().slice(0,180)||'Sunucu JSON olmayan yanit dondurdu'}`);} if(!r.ok) throw new Error((data&&data.detail)||`HTTP ${r.status}`); return data; }
 const autoApproval = document.querySelector('#auto-approval');
