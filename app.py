@@ -241,6 +241,12 @@ class InstagramImagePublishRequest(BaseModel):
     approved: bool = False
 
 
+class InstagramVideoPublishRequest(BaseModel):
+    video_url: str
+    caption: str = ""
+    approved: bool = False
+
+
 class OpenAIChatRequest(BaseModel):
     model: str = "local-qwen"
     messages: list[dict[str, Any]]
@@ -1342,6 +1348,18 @@ def list_assets(
         ).fetchall()
     fields = ("id", "kind", "path", "relative_path", "sha256", "mime_type", "project", "source", "metadata_json", "created_at", "updated_at")
     return {"count": len(rows), "assets": [dict(zip(fields, row)) for row in rows]}
+
+
+@app.get("/api/assets/{asset_id}/download")
+def download_asset(asset_id: int) -> FileResponse:
+    with db() as connection:
+        row = connection.execute("SELECT path, mime_type FROM assets WHERE id = ?", (asset_id,)).fetchone()
+    if not row:
+        raise HTTPException(404, "Asset bulunamadi.")
+    path = Path(row[0]).resolve()
+    if not path.is_file():
+        raise HTTPException(410, "Asset dosyasi artik mevcut degil.")
+    return FileResponse(path, media_type=row[1] or None, filename=path.name)
 
 
 @app.get("/v1/models")
@@ -2450,6 +2468,50 @@ def publish_instagram_image(request: InstagramImagePublishRequest) -> dict[str, 
         with urlopen(Request(f"{base}/media_publish", data=publish_data, method="POST"), timeout=30) as response:
             published = json.loads(response.read().decode("utf-8"))
         return {"status": "published", "container": container, "published": published}
+    except HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise HTTPException(502, f"Instagram Graph API hatasi: {detail[:1000]}") from exc
+    except (URLError, json.JSONDecodeError) as exc:
+        raise HTTPException(502, f"Instagram Graph API baglantisi basarisiz: {exc}") from exc
+
+
+@app.post("/api/instagram/video/publish")
+def publish_instagram_video(request: InstagramVideoPublishRequest) -> dict[str, Any]:
+    """Create and publish a public Instagram Reel after explicit approval."""
+    if not request.approved:
+        return {"status": "approval_required", "video_url": request.video_url, "caption": request.caption}
+    parsed = urlparse(request.video_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise HTTPException(400, "video_url public bir http(s) URL olmali.")
+    if not INSTAGRAM_ACCESS_TOKEN or not INSTAGRAM_USER_ID:
+        raise HTTPException(503, "INSTAGRAM_ACCESS_TOKEN ve INSTAGRAM_USER_ID ayarlanmis olmali.")
+    base = f"https://graph.facebook.com/{INSTAGRAM_GRAPH_VERSION}/{INSTAGRAM_USER_ID}"
+    try:
+        container_data = urlencode({
+            "media_type": "REELS",
+            "video_url": request.video_url,
+            "caption": request.caption[:2_200],
+            "access_token": INSTAGRAM_ACCESS_TOKEN,
+        }).encode()
+        with urlopen(Request(f"{base}/media", data=container_data, method="POST"), timeout=30) as response:
+            container = json.loads(response.read().decode("utf-8"))
+        creation_id = container.get("id")
+        if not creation_id:
+            raise HTTPException(502, f"Instagram Reel kapsayicisi olusturulamadi: {container}")
+        status_code = "IN_PROGRESS"
+        for _ in range(12):
+            status_url = f"https://graph.facebook.com/{INSTAGRAM_GRAPH_VERSION}/{creation_id}?fields=status_code&access_token={INSTAGRAM_ACCESS_TOKEN}"
+            with urlopen(status_url, timeout=30) as response:
+                status_code = json.loads(response.read().decode("utf-8")).get("status_code", status_code)
+            if status_code in {"FINISHED", "ERROR"}:
+                break
+            time.sleep(5)
+        if status_code != "FINISHED":
+            raise HTTPException(502, f"Instagram Reel hazir degil: {status_code}")
+        publish_data = urlencode({"creation_id": creation_id, "access_token": INSTAGRAM_ACCESS_TOKEN}).encode()
+        with urlopen(Request(f"{base}/media_publish", data=publish_data, method="POST"), timeout=30) as response:
+            published = json.loads(response.read().decode("utf-8"))
+        return {"status": "published", "container": container, "container_status": status_code, "published": published}
     except HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
         raise HTTPException(502, f"Instagram Graph API hatasi: {detail[:1000]}") from exc
