@@ -110,6 +110,10 @@ Kurulum kendiliginden baslamaz; once komut onizlenir ve kullanici onayi gerekir.
 
 Ogrenme notlarini kaydetmeden once onay istemek icin `.env` icinde `REQUIRE_MEMORY_APPROVAL=on` yapin. Chat isteginde `approve_memory=true` gelmeden not `memory.db` dosyasina yazilmaz.
 
+## Kalıcı sohbet oturumları
+
+Chat mesajları `memory.db` içindeki `chat_sessions` ve `chat_messages` tablolarında saklanır. Arayüzdeki oturum seçici eski konuşmayı geri yükler; yeni sohbet ayrı bir oturum açar. Sohbeti silme, onay penceresinden sonra oturumu ve tüm mesajlarını kalıcı olarak siler. API: `GET/POST /api/chat/sessions`, `GET /api/chat/sessions/{session_id}/messages`, `DELETE /api/chat/sessions/{session_id}`. Model, seçili oturumun son 20 mesajını takip context’i olarak kullanır.
+
 Embedding modeli yoksa `/api/embedding/status` kurulum komutunu gosterir. `/api/embedding/prepare` endpoint'i `approved=false` ile sadece onay ister; `approved=true` olmadan `ollama pull nomic-embed-text` calistirilmaz.
 
 OCR icin `/api/ocr/status` eksik Python baglayicisini ve Tesseract motorunu bildirir. `/api/ocr/prepare` onay olmadan kurulum yapmaz; Windows motoru icin `winget install --id UB-Mannheim.TesseractOCR -e` komutunu gosterir.

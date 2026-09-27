@@ -86,6 +86,11 @@ class ChatRequest(BaseModel):
     message: str
     memory: bool = True
     approve_memory: bool = False
+    session_id: str | None = None
+
+
+class ChatSessionRequest(BaseModel):
+    title: str = "Yeni sohbet"
 
 
 class MemoryRequest(BaseModel):
@@ -319,6 +324,7 @@ AGENT_ROLES: dict[str, dict[str, Any]] = {
 }
 
 AGENT_CAPABILITIES: list[dict[str, str]] = [
+    {"id": "chat_sessions", "title": "Kalici sohbet oturumlari", "description": "SQLite sohbet gecmisi, oturum secme, devam ettirme ve onayli silme."},
     {"id": "workspace", "title": "Workspace okuma ve guvenli dosya akisi", "description": "Dosya okuma, diff, backup, onayli yazma ve rollback."},
     {"id": "project_delivery", "title": "Offline proje uretimi ve teslimi", "description": "Klasor yapisi, kaynak, test, compile ve teslim manifesti."},
     {"id": "self_repair", "title": "Sinirli self-repair", "description": "Audit, role odakli duzeltme, test ve en fazla uc deneme."},
@@ -370,6 +376,13 @@ def db() -> sqlite3.Connection:
     connection.execute(
         "CREATE TABLE IF NOT EXISTS assets (id INTEGER PRIMARY KEY, kind TEXT NOT NULL, path TEXT NOT NULL, relative_path TEXT NOT NULL DEFAULT '', sha256 TEXT NOT NULL DEFAULT '', mime_type TEXT NOT NULL DEFAULT '', project TEXT NOT NULL DEFAULT '', source TEXT NOT NULL DEFAULT 'local', metadata_json TEXT NOT NULL DEFAULT '{}', created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP)"
     )
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS chat_sessions (session_id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT 'Yeni sohbet', created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP)"
+    )
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS chat_messages (id INTEGER PRIMARY KEY, session_id TEXT NOT NULL, role TEXT NOT NULL CHECK(role IN ('user','assistant')), content TEXT NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(session_id) REFERENCES chat_sessions(session_id) ON DELETE CASCADE)"
+    )
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id, id)")
     return connection
 
 
@@ -1898,26 +1911,97 @@ def agent_self_audit(request: SelfAuditRequest) -> dict[str, Any]:
     return result
 
 
+@app.get("/api/chat/sessions")
+def list_chat_sessions() -> dict[str, Any]:
+    with db() as connection:
+        rows = connection.execute(
+            "SELECT s.session_id, s.title, s.created_at, s.updated_at, COUNT(m.id) FROM chat_sessions s LEFT JOIN chat_messages m ON m.session_id = s.session_id GROUP BY s.session_id ORDER BY s.updated_at DESC"
+        ).fetchall()
+    fields = ("session_id", "title", "created_at", "updated_at", "message_count")
+    return {"sessions": [dict(zip(fields, row)) for row in rows]}
+
+
+@app.post("/api/chat/sessions")
+def create_chat_session(request: ChatSessionRequest) -> dict[str, str]:
+    session_id = uuid.uuid4().hex
+    title = request.title.strip()[:100] or "Yeni sohbet"
+    with db() as connection:
+        connection.execute("INSERT INTO chat_sessions(session_id, title) VALUES (?, ?)", (session_id, title))
+    return {"session_id": session_id, "title": title}
+
+
+@app.get("/api/chat/sessions/{session_id}/messages")
+def get_chat_messages(session_id: str) -> dict[str, Any]:
+    with db() as connection:
+        exists = connection.execute("SELECT 1 FROM chat_sessions WHERE session_id = ?", (session_id,)).fetchone()
+        if not exists:
+            raise HTTPException(404, "Sohbet oturumu bulunamadi.")
+        rows = connection.execute(
+            "SELECT id, role, content, created_at FROM chat_messages WHERE session_id = ? ORDER BY id",
+            (session_id,),
+        ).fetchall()
+    fields = ("id", "role", "content", "created_at")
+    return {"session_id": session_id, "messages": [dict(zip(fields, row)) for row in rows]}
+
+
+@app.delete("/api/chat/sessions/{session_id}")
+def delete_chat_session(session_id: str) -> dict[str, str]:
+    with db() as connection:
+        exists = connection.execute("SELECT 1 FROM chat_sessions WHERE session_id = ?", (session_id,)).fetchone()
+        if not exists:
+            raise HTTPException(404, "Sohbet oturumu bulunamadi.")
+        connection.execute("DELETE FROM chat_messages WHERE session_id = ?", (session_id,))
+        connection.execute("DELETE FROM chat_sessions WHERE session_id = ?", (session_id,))
+    return {"status": "deleted", "session_id": session_id}
+
+
 @app.post("/api/chat")
 def chat(request: ChatRequest) -> dict[str, str]:
     message = request.message.strip()
     if not message:
         raise HTTPException(400, "Mesaj bos olamaz.")
+    session_id = request.session_id
+    with db() as connection:
+        if session_id:
+            exists = connection.execute("SELECT 1 FROM chat_sessions WHERE session_id = ?", (session_id,)).fetchone()
+            if not exists:
+                raise HTTPException(404, "Sohbet oturumu bulunamadi.")
+        else:
+            session_id = uuid.uuid4().hex
+            connection.execute("INSERT INTO chat_sessions(session_id) VALUES (?)", (session_id,))
+        history = connection.execute(
+            "SELECT role, content FROM chat_messages WHERE session_id = ? ORDER BY id DESC LIMIT 20",
+            (session_id,),
+        ).fetchall()
+        connection.execute("INSERT INTO chat_messages(session_id, role, content) VALUES (?, 'user', ?)", (session_id, message))
+        connection.execute(
+            "UPDATE chat_sessions SET title = CASE WHEN title = 'Yeni sohbet' THEN ? ELSE title END, updated_at = CURRENT_TIMESTAMP WHERE session_id = ?",
+            (message[:80], session_id),
+        )
+
+    prior_messages = [{"role": role, "content": content} for role, content in reversed(history)]
+
+    def finish(content: str, intent: str, **extra: str) -> dict[str, str]:
+        with db() as connection:
+            connection.execute("INSERT INTO chat_messages(session_id, role, content) VALUES (?, 'assistant', ?)", (session_id, content))
+            connection.execute("UPDATE chat_sessions SET updated_at = CURRENT_TIMESTAMP WHERE session_id = ?", (session_id,))
+        return {"content": content, "intent": intent, "session_id": session_id, **extra}
+
     if re.fullmatch(r"(?:merhaba|merhabalar|selam|selamlar|hey|hi|hello)[!. ]*", message, re.IGNORECASE):
-        return {"content": "Merhaba! Nasıl yardımcı olabilirim?", "intent": "greeting"}
+        return finish("Merhaba! Nasıl yardımcı olabilirim?", "greeting")
     if any(marker in message.lower() for marker in ("nereye kayıt", "nereye kayit", "hafıza nerede", "hafiza nerede")):
-        return {
-            "content": (
+        return finish(
+            (
                 f"Kalıcı notlar: {MEMORY_DB}\n"
                 f"İşlem günlüğü: {MEMORY_DB} içindeki operation_journal tablosu\n"
                 f"Dosya yedekleri: {AGENT_TOOLS.backup_root}\n"
                 "Taşımak için memory.db dosyasını ve gerekirse .localqwen-backups klasörünü kopyalayabilirsin."
             ),
-            "intent": "memory_location",
-        }
+            "memory_location",
+        )
     if any(marker in message.lower() for marker in ("neler yapabilirsin", "neler yapabilir", "ne yapabilirsin", "yeteneklerin")):
-        return {
-            "content": (
+        return finish(
+            (
                 "Ben DeepPanda icindeki yerel LocalQwenAgent'im.\n\n"
                 "Yapabildiklerim:\n"
                 "- DeepPanda workspace icindeki dosyalari okuyabilirim.\n"
@@ -1933,8 +2017,8 @@ def chat(request: ChatRequest) -> dict[str, str]:
                 "Dosya yazma, silme, paket kurma ve komut calistirma acik onay ister. Public web/GitHub icin internet gerekir; private/login sayfalarda sifre, MFA, cookie veya token istemem. "
                 "Gizli ic dusunme taslagimi gostermem."
             ),
-            "intent": "capabilities",
-        }
+            "capabilities",
+        )
     decision = decide(message)
     context_parts = []
     if request.memory:
@@ -1949,12 +2033,13 @@ def chat(request: ChatRequest) -> dict[str, str]:
     system = system_prompt(decision, "\n\n".join(context_parts))
     if any(marker in message.lower() for marker in ("ayrıntı", "ayrinti", "detay", "adım adım", "adim adim", "nedenini")):
         system += "\nKullanici ayrinti istedi: sonucu, gerekceleri, varsayimlari ve uygulanabilir adimlari ayrintili anlat; gizli ic dusunme taslagini yazma."
-    answer = call_ollama([{"role": "system", "content": system}, {"role": "user", "content": message}])
+    conversation = [{"role": "system", "content": system}, *prior_messages, {"role": "user", "content": message}]
+    answer = call_ollama(conversation)
     wants_learning = any(
         marker in message.lower()
         for marker in ("öğren", "ogren", "hafızaya", "hafizaya", "kalıcı", "kalici", "kaydet")
     )
-    result = {"content": answer, "intent": decision.intent}
+    result = finish(answer, decision.intent)
     if wants_learning:
         learning_note = f"Kullanici tarafindan kaydedilen ogrenme notu\nSoru: {message}\nYanıt: {answer}"
         if REQUIRE_MEMORY_APPROVAL and not request.approve_memory:

@@ -153,3 +153,46 @@ def test_workspace_rollback_removes_new_file(tmp_path: Path):
     result = tools.write_file("new.txt", "created\n")
     tools.rollback_write(result)
     assert not (tmp_path / "new.txt").exists()
+
+
+def test_chat_sessions_persist_list_history_and_delete(tmp_path: Path, monkeypatch):
+    import app
+
+    monkeypatch.setattr(app, "MEMORY_DB", tmp_path / "memory.db")
+    session = app.create_chat_session(app.ChatSessionRequest(title="Uzun proje"))
+    session_id = session["session_id"]
+    monkeypatch.setattr(app, "workspace_context", lambda _query: "")
+    monkeypatch.setattr(app, "call_ollama", lambda _messages: "Proje yaniti")
+
+    response = app.chat(app.ChatRequest(message="Projeyi analiz et", session_id=session_id, memory=False))
+    history = app.get_chat_messages(session_id)
+    sessions = app.list_chat_sessions()["sessions"]
+
+    assert response["session_id"] == session_id
+    assert [message["role"] for message in history["messages"]] == ["user", "assistant"]
+    assert sessions[0]["title"] == "Uzun proje"
+    assert sessions[0]["message_count"] == 2
+
+    assert app.delete_chat_session(session_id)["status"] == "deleted"
+    assert app.list_chat_sessions()["sessions"] == []
+
+
+def test_chat_session_history_is_added_to_followup_context(tmp_path: Path, monkeypatch):
+    import app
+
+    monkeypatch.setattr(app, "MEMORY_DB", tmp_path / "memory.db")
+    monkeypatch.setattr(app, "workspace_context", lambda _query: "")
+    session_id = app.create_chat_session(app.ChatSessionRequest())["session_id"]
+    requested_messages = []
+
+    def fake_call(messages):
+        requested_messages.append(messages)
+        return "Kobalt demistin."
+
+    monkeypatch.setattr(app, "call_ollama", fake_call)
+    app.chat(app.ChatRequest(message="En sevdiğim renk kobalt", session_id=session_id, memory=False))
+    app.chat(app.ChatRequest(message="En sevdiğim renk neydi?", session_id=session_id, memory=False))
+
+    followup_context = requested_messages[1]
+    assert any(item["content"] == "En sevdiğim renk kobalt" for item in followup_context)
+    assert any(item["content"] == "Kobalt demistin." for item in followup_context)
