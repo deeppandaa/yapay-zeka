@@ -196,3 +196,24 @@ def test_chat_session_history_is_added_to_followup_context(tmp_path: Path, monke
     followup_context = requested_messages[1]
     assert any(item["content"] == "En sevdiğim renk kobalt" for item in followup_context)
     assert any(item["content"] == "Kobalt demistin." for item in followup_context)
+
+
+def test_chat_session_recalls_relevant_turns_older_than_recent_window(tmp_path: Path, monkeypatch):
+    import app
+
+    monkeypatch.setattr(app, "MEMORY_DB", tmp_path / "memory.db")
+    monkeypatch.setattr(app, "workspace_context", lambda _query: "")
+    session_id = app.create_chat_session(app.ChatSessionRequest())["session_id"]
+    requested_messages = []
+
+    def fake_call(messages):
+        requested_messages.append(messages)
+        return "Not edildi."
+
+    monkeypatch.setattr(app, "call_ollama", fake_call)
+    app.chat(app.ChatRequest(message="Proje gizli kod adi ORCHID", session_id=session_id, memory=False))
+    for index in range(10):
+        app.chat(app.ChatRequest(message=f"Bagimsiz konu {index} hakkinda bilgi ver", session_id=session_id, memory=False))
+    app.chat(app.ChatRequest(message="ORCHID kod adini hatirliyor musun?", session_id=session_id, memory=False))
+
+    assert any(item["content"] == "Proje gizli kod adi ORCHID" for item in requested_messages[-1])

@@ -1970,16 +1970,26 @@ def chat(request: ChatRequest) -> dict[str, str]:
             session_id = uuid.uuid4().hex
             connection.execute("INSERT INTO chat_sessions(session_id) VALUES (?)", (session_id,))
         history = connection.execute(
-            "SELECT role, content FROM chat_messages WHERE session_id = ? ORDER BY id DESC LIMIT 20",
+            "SELECT id, role, content FROM chat_messages WHERE session_id = ? ORDER BY id DESC LIMIT 20",
             (session_id,),
         ).fetchall()
+        recent_floor = min((row[0] for row in history), default=0)
+        history_terms = list(dict.fromkeys(term.lower() for term in re.findall(r"[\w-]{4,}", message)))[:8]
+        relevant_history = []
+        if history_terms:
+            match_clause = " OR ".join("content LIKE ?" for _ in history_terms)
+            relevant_history = connection.execute(
+                f"SELECT id, role, content FROM chat_messages WHERE session_id = ? AND id < ? AND ({match_clause}) ORDER BY id DESC LIMIT 8",
+                [session_id, recent_floor, *(f"%{term}%" for term in history_terms)],
+            ).fetchall()
         connection.execute("INSERT INTO chat_messages(session_id, role, content) VALUES (?, 'user', ?)", (session_id, message))
         connection.execute(
             "UPDATE chat_sessions SET title = CASE WHEN title = 'Yeni sohbet' THEN ? ELSE title END, updated_at = CURRENT_TIMESTAMP WHERE session_id = ?",
             (message[:80], session_id),
         )
 
-    prior_messages = [{"role": role, "content": content} for role, content in reversed(history)]
+    context_by_id = {row_id: {"role": role, "content": content} for row_id, role, content in [*relevant_history, *history]}
+    prior_messages = [context_by_id[row_id] for row_id in sorted(context_by_id)]
 
     def finish(content: str, intent: str, **extra: str) -> dict[str, str]:
         with db() as connection:
