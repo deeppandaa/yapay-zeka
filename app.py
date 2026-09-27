@@ -1987,10 +1987,16 @@ async def analyze_media(file: UploadFile = File(...), transcribe: bool = Form(Tr
             check=True, capture_output=True, text=True, timeout=300,
         )
         subprocess.run(
-            ["ffmpeg", "-y", "-i", str(source), "-vf", "fps=1/10", "-frames:v", "12", str(frames)],
+            ["ffmpeg", "-y", "-i", str(source), "-vf", "fps=1/10", "-frames:v", "12", "-c:v", "mjpeg", "-strict", "-2", str(frames)],
             check=True, capture_output=True, text=True, timeout=300,
         )
         frame_paths = sorted(media_dir.glob("frame-*.jpg"))
+        if not frame_paths:
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", str(source), "-frames:v", "1", "-c:v", "mjpeg", "-strict", "-2", str(frames)],
+                check=True, capture_output=True, text=True, timeout=300,
+            )
+            frame_paths = sorted(media_dir.glob("frame-*.jpg"))
         result["frames"] = [
             {"path": str(path), "timestamp_seconds": index * 10}
             for index, path in enumerate(frame_paths)
