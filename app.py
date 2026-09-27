@@ -71,6 +71,8 @@ RESEARCH_JOBS: dict[str, dict[str, Any]] = {}
 RESEARCH_LOCK = threading.Lock()
 BROWSER_SESSIONS: dict[str, dict[str, Any]] = {}
 BROWSER_SESSION_LOCK = threading.Lock()
+MEDIA_JOBS: dict[str, dict[str, Any]] = {}
+MEDIA_JOB_LOCK = threading.Lock()
 IMAGE_PIPELINE: Any = None
 IMAGE_PIPELINE_LOCK = threading.Lock()
 VIDEO_PIPELINE: Any = None
@@ -2470,6 +2472,59 @@ def generate_video(request: VideoGenerateRequest) -> FileResponse:
     shutil.copy2(output, persistent_output)
     register_asset(persistent_output, "video", "video/mp4", source="generated", metadata={"prompt": prompt, "duration_seconds": duration, "backend": "image-motion-ffmpeg"})
     return FileResponse(persistent_output, media_type="video/mp4", filename="localqwen_generated.mp4", background=BackgroundTask(shutil.rmtree, directory, ignore_errors=True))
+
+
+@app.post("/api/media/video/start")
+def start_video_job(request: VideoGenerateRequest) -> dict[str, str]:
+    job_id = uuid.uuid4().hex
+    with MEDIA_JOB_LOCK:
+        MEDIA_JOBS[job_id] = {"status": "queued", "progress": 0, "events": [{"message": "Video işi kuyruğa alındı."}], "cancel_requested": False}
+
+    def worker() -> None:
+        with MEDIA_JOB_LOCK:
+            MEDIA_JOBS[job_id].update(status="running", progress=10, events=[{"message": "Video modeli hazırlanıyor."}])
+        try:
+            with MEDIA_JOB_LOCK:
+                if MEDIA_JOBS[job_id]["cancel_requested"]:
+                    MEDIA_JOBS[job_id].update(status="cancelled", progress=0)
+                    return
+                MEDIA_JOBS[job_id]["progress"] = 25
+                MEDIA_JOBS[job_id]["events"].append({"message": "Prompt işleniyor ve kareler üretiliyor."})
+            response = generate_video(request)
+            path = Path(response.path)
+            with db() as connection:
+                row = connection.execute("SELECT id FROM assets WHERE path = ? ORDER BY id DESC LIMIT 1", (str(path.resolve()),)).fetchone()
+            with MEDIA_JOB_LOCK:
+                cancelled = MEDIA_JOBS[job_id]["cancel_requested"]
+                MEDIA_JOBS[job_id].update(status="cancelled" if cancelled else "completed", progress=100 if not cancelled else 0, asset_id=int(row[0]) if row and not cancelled else None, events=[{"message": "Video iptal edildi." if cancelled else "Video hazır."}])
+        except Exception as exc:
+            with MEDIA_JOB_LOCK:
+                MEDIA_JOBS[job_id].update(status="failed", progress=0, error=str(exc), events=[{"message": f"Video hatası: {exc}"}])
+
+    threading.Thread(target=worker, daemon=True).start()
+    return {"job_id": job_id, "status": "queued"}
+
+
+@app.get("/api/media/video/jobs/{job_id}")
+def video_job_status(job_id: str) -> dict[str, Any]:
+    with MEDIA_JOB_LOCK:
+        job = MEDIA_JOBS.get(job_id)
+        if job is None:
+            raise HTTPException(404, "Video işi bulunamadı.")
+        return {"job_id": job_id, **job}
+
+
+@app.post("/api/media/video/jobs/{job_id}/cancel")
+def cancel_video_job(job_id: str) -> dict[str, str]:
+    with MEDIA_JOB_LOCK:
+        job = MEDIA_JOBS.get(job_id)
+        if job is None:
+            raise HTTPException(404, "Video işi bulunamadı.")
+        if job["status"] in {"completed", "failed", "cancelled"}:
+            return {"status": str(job["status"])}
+        job["cancel_requested"] = True
+        job["events"].append({"message": "İptal istendi; mevcut model adımı tamamlanıyor."})
+        return {"status": "cancel_requested"}
 
 
 @app.post("/api/media/image/edit")
