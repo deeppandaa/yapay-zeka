@@ -210,6 +210,11 @@ class ImageGenerateRequest(BaseModel):
     height: int = 256
 
 
+class VideoGenerateRequest(BaseModel):
+    prompt: str
+    duration_seconds: float = 3
+
+
 class VideoEditRequest(BaseModel):
     start_seconds: float = 0
     duration_seconds: float = 10
@@ -2141,6 +2146,45 @@ def generate_image(request: ImageGenerateRequest) -> FileResponse:
     output = Path(tempfile.gettempdir()) / f"localqwen_image_{uuid.uuid4().hex}.png"
     image.save(output, format="PNG")
     return FileResponse(output, media_type="image/png", filename="localqwen_generated.png", background=BackgroundTask(output.unlink, missing_ok=True))
+
+
+@app.post("/api/media/video")
+def generate_video(request: VideoGenerateRequest) -> FileResponse:
+    """Create a short offline MP4 with a generated image and gentle motion."""
+    global IMAGE_PIPELINE
+    prompt = request.prompt.strip()
+    if not prompt or len(prompt) > 2_000:
+        raise HTTPException(400, "Video promptu 1-2000 karakter olmali.")
+    duration = max(1, min(request.duration_seconds, 10))
+    if not IMAGE_MODEL_PATH.is_dir():
+        raise HTTPException(503, f"Gorsel modeli bulunamadi: {IMAGE_MODEL_PATH}")
+    directory = Path(tempfile.mkdtemp(prefix="localqwen_video_gen_"))
+    image_path = directory / "frame.png"
+    output = directory / "generated.mp4"
+    try:
+        import torch
+        from diffusers import StableDiffusionPipeline
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        dtype = torch.float16 if device == "cuda" else torch.float32
+        with IMAGE_PIPELINE_LOCK:
+            if IMAGE_PIPELINE is None:
+                IMAGE_PIPELINE = StableDiffusionPipeline.from_pretrained(
+                    str(IMAGE_MODEL_PATH), local_files_only=True, dtype=dtype, safety_checker=None,
+                ).to(device)
+            IMAGE_PIPELINE(prompt, num_inference_steps=4, guidance_scale=0.0, width=256, height=256).images[0].save(image_path)
+        frames = round(duration * 24)
+        subprocess.run(
+            ["ffmpeg", "-y", "-loop", "1", "-i", str(image_path), "-vf", f"zoompan=z='min(zoom+0.0015,1.12)':d={frames}:s=256x256:fps=24", "-t", str(duration), "-c:v", "libx264", "-pix_fmt", "yuv420p", str(output)],
+            check=True, capture_output=True, text=True, timeout=300,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        shutil.rmtree(directory, ignore_errors=True)
+        raise HTTPException(422, f"Video kodlama basarisiz: {exc}") from exc
+    except Exception as exc:
+        shutil.rmtree(directory, ignore_errors=True)
+        raise HTTPException(503, f"Video uretimi basarisiz: {exc}") from exc
+    return FileResponse(output, media_type="video/mp4", filename="localqwen_generated.mp4", background=BackgroundTask(shutil.rmtree, directory, ignore_errors=True))
 
 
 @app.post("/api/media/image/edit")
