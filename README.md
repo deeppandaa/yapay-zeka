@@ -91,6 +91,8 @@ Workspace içindeki dosya ve klasörler onaysız okunabilir. `.env` içindeki `A
 
 `/api/browser/snapshot` yalnızca yeni, headless ve public bir tarayıcı oturumu açar; Opera/Chrome çerezlerini veya mevcut girişleri taşımaz. Özel bir sayfa giriş istiyorsa kullanıcı kendi tarayıcısında giriş yapmalıdır. Agent şifre, MFA kodu, cookie veya token istemez/saklamaz; authenticated browser session bridge yoksa özel sayfayı okuyamaz. CAPTCHA ve MFA atlatılmaz.
 
+Public sayfalarda sınırlı tarayıcı eylemleri için `/api/browser/action` kullanılabilir: `goto`, `click`, `fill` ve `select`. `click`, `fill` ve `select` işlemleri `approved=true` ister. Yerel komutlar için `/api/tools/run` aynı onay kuralını ve izinli araç listesini kullanır; shell metni veya keyfi JavaScript çalıştırılmaz.
+
 ## GitHub topic öğrenme
 
 Public topic depolarını listelemek için `POST /api/github/topic/research` endpoint'ine `download=false` gönderin. `download=true` yalnızca `approved=true` ile shallow clone yapar; README ve public kaynaklar Qwen tarafından analiz edilir. Öğrenme notu `memory.db` içine, repo ve commit SHA bilgisi `library_repositories` tablosuna yazılır. Kayıtları `GET /api/github/repositories` ile görebilirsiniz.

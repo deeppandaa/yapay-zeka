@@ -113,6 +113,14 @@ class BrowserRequest(BaseModel):
     url: str
 
 
+class BrowserActionRequest(BaseModel):
+    url: str
+    action: str
+    selector: str = ""
+    value: str = ""
+    approved: bool = False
+
+
 class ToolRequest(BaseModel):
     command: list[str]
     approved: bool = False
@@ -1881,6 +1889,46 @@ async def browser_snapshot(request: BrowserRequest) -> dict[str, str]:
         raise HTTPException(503, "Playwright kurulu degil.") from exc
     except Exception as exc:
         raise HTTPException(502, f"Browser sayfasi okunamadi: {exc}") from exc
+
+
+@app.post("/api/browser/action")
+async def browser_action(request: BrowserActionRequest) -> dict[str, Any]:
+    """Perform one approved, non-scripted action in a fresh public browser session."""
+    parsed = urlparse(request.url.strip())
+    allowed_actions = {"goto", "click", "fill", "select"}
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise HTTPException(400, "Yalnızca public http/https URL kullanılabilir.")
+    if request.action not in allowed_actions:
+        raise HTTPException(400, f"action şunlardan biri olmalı: {', '.join(sorted(allowed_actions))}.")
+    if request.action != "goto" and not request.approved:
+        return {"status": "approval_required", "action": request.action, "selector": request.selector}
+    if request.action in {"click", "fill", "select"} and not request.selector:
+        raise HTTPException(400, "Bu action için selector gerekli.")
+    if request.action in {"fill", "select"} and len(request.value) > 2_000:
+        raise HTTPException(400, "Form değeri çok uzun.")
+    try:
+        from playwright.async_api import async_playwright
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch(headless=True)
+            page = await browser.new_page()
+            await page.goto(request.url, wait_until="domcontentloaded", timeout=30_000)
+            if request.action == "click":
+                await page.locator(request.selector).first.click(timeout=10_000)
+                await page.wait_for_load_state("domcontentloaded", timeout=10_000)
+            elif request.action == "fill":
+                await page.locator(request.selector).first.fill(request.value)
+            elif request.action == "select":
+                await page.locator(request.selector).first.select_option(request.value)
+            title = await page.title()
+            content = (await page.locator("body").inner_text())[:40_000]
+            result_url = page.url
+            await browser.close()
+        journal_operation("browser_action", f"Onaylı browser action: {request.action}", json.dumps({"url": result_url, "selector": request.selector}, ensure_ascii=False))
+        return {"status": "completed", "action": request.action, "url": result_url, "title": title, "content": content}
+    except ImportError as exc:
+        raise HTTPException(503, "Playwright kurulu değil.") from exc
+    except Exception as exc:
+        raise HTTPException(502, f"Browser action başarısız: {exc}") from exc
 
 
 @app.post("/api/github/research")
