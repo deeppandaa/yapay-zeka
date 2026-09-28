@@ -7,5 +7,6 @@
   {"name":"sentence-transformers","repo":"https://github.com/UKPLab/sentence-transformers.git","category":"embeddings"},
   {"name":"unsloth","repo":"https://github.com/unslothai/unsloth.git","category":"fine_tuning"},
   {"name":"llama.cpp","repo":"https://github.com/ggml-org/llama.cpp.git","category":"inference"},
-  {"name":"sglang-ktransformers","repo":"https://github.com/kvcache-ai/ktransformers.git","category":"inference"}
+  {"name":"sglang-ktransformers","repo":"https://github.com/kvcache-ai/ktransformers.git","category":"inference"},
+  {"name":"gemma-4-developer-agent","repo":"local-archive:gemma-4-developer-agent","path":"gemma-4-developer-agent.md","source":"archive:gemma4-developer-agent:sha256:6a3e5826ef930823db259d257dd34224fa521f984e9b3f4cbbe86f985436abe7","category":"agent_workflow"}
 ]

@@ -114,6 +114,10 @@ Ogrenme notlarini kaydetmeden once onay istemek icin `.env` icinde `REQUIRE_MEMO
 
 Chat mesajları `memory.db` içindeki `chat_sessions` ve `chat_messages` tablolarında saklanır. Arayüzdeki oturum seçici eski konuşmayı geri yükler; yeni sohbet ayrı bir oturum açar. Sohbeti silme, onay penceresinden sonra oturumu ve tüm mesajlarını kalıcı olarak siler. API: `GET/POST /api/chat/sessions`, `GET /api/chat/sessions/{session_id}/messages`, `DELETE /api/chat/sessions/{session_id}`. Model, seçili oturumun son 20 mesajını takip context’i olarak kullanır.
 
+## Yerel geliştirici-agent playbook'u
+
+`AI-Libraries/gemma-4-developer-agent.md`, declarative agent mimarisi, güvenli araç sözleşmeleri, bütçe/context yönetimi, hedefli test ve patch doğrulama ilkelerinin ZIP'ten bağımsız yerel özetidir. Kodlama isteklerinde `agent_orchestrator.py` bu playbook kurallarını system prompt'a ekler. Özet ayrıca `memory.db` içinde `library_knowledge` kategorisiyle tutulur. Kaynak arşivin SHA-256'sı belge içinde provenance olarak bulunur; model snapshot'ları, graph/embedding dataset'leri veya wheel'ler arşive kopyalanmaz ve çalıştırılmaz.
+
 Embedding modeli yoksa `/api/embedding/status` kurulum komutunu gosterir. `/api/embedding/prepare` endpoint'i `approved=false` ile sadece onay ister; `approved=true` olmadan `ollama pull nomic-embed-text` calistirilmaz.
 
 OCR icin `/api/ocr/status` eksik Python baglayicisini ve Tesseract motorunu bildirir. `/api/ocr/prepare` onay olmadan kurulum yapmaz; Windows motoru icin `winget install --id UB-Mannheim.TesseractOCR -e` komutunu gosterir.

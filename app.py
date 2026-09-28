@@ -325,6 +325,7 @@ AGENT_ROLES: dict[str, dict[str, Any]] = {
 
 AGENT_CAPABILITIES: list[dict[str, str]] = [
     {"id": "chat_sessions", "title": "Kalici sohbet oturumlari", "description": "SQLite sohbet gecmisi, oturum secme, devam ettirme ve onayli silme."},
+    {"id": "engineering_playbook", "title": "Yerel yazilim muhendisligi playbook'u", "description": "Hedefli inceleme, falsifiye edilebilir hipotez, minimal yama, test ve izole dogrulama."},
     {"id": "workspace", "title": "Workspace okuma ve guvenli dosya akisi", "description": "Dosya okuma, diff, backup, onayli yazma ve rollback."},
     {"id": "project_delivery", "title": "Offline proje uretimi ve teslimi", "description": "Klasor yapisi, kaynak, test, compile ve teslim manifesti."},
     {"id": "self_repair", "title": "Sinirli self-repair", "description": "Audit, role odakli duzeltme, test ve en fazla uc deneme."},
@@ -833,7 +834,7 @@ def save_memory(note: str) -> None:
 
 
 def save_typed_memory(note: str, category: str = "general", project: str = "", source: str = "agent") -> None:
-    allowed = {"preference", "project_fact", "procedure", "research", "task_history", "general"}
+    allowed = {"preference", "project_fact", "procedure", "research", "task_history", "library_knowledge", "general"}
     category = category if category in allowed else "general"
     note = re.sub(r"\s+", " ", note).strip()
     with db() as connection:
