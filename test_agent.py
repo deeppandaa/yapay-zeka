@@ -168,6 +168,58 @@ def test_workspace_rollback_removes_new_file(tmp_path: Path):
     assert not (tmp_path / "new.txt").exists()
 
 
+def test_tts_cache_reuses_same_voice_output(monkeypatch, tmp_path):
+    import sys
+    import types
+
+    import app
+
+    fake_model = tmp_path / "fake_voice.onnx"
+    fake_model.write_bytes(b"fake-model")
+    monkeypatch.setattr(app, "PIPER_MODEL_PATH", fake_model)
+    monkeypatch.setattr(app, "ROOT", tmp_path)
+    monkeypatch.setattr(app, "PIPER_VOICE", None)
+
+    class FakeVoice:
+        @staticmethod
+        def load(path):
+            assert path == str(fake_model)
+            return FakeVoice()
+
+        def synthesize_wav(self, text, wav_file):
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(22050)
+            wav_file.writeframes(b"fake-audio")
+
+    fake_module = types.ModuleType("piper")
+    fake_module.PiperVoice = FakeVoice
+    monkeypatch.setitem(sys.modules, "piper", fake_module)
+
+    first = app.synthesize_tts(app.TTSRequest(text="Merhaba dunya"))
+    second = app.synthesize_tts(app.TTSRequest(text="Merhaba dunya"))
+
+    assert str(first.path) == str(second.path)
+    assert str(first.path).endswith(".wav")
+    assert Path(first.path).is_file()
+
+
+def test_asset_preview_returns_download_and_preview_urls(monkeypatch, tmp_path):
+    import app
+
+    monkeypatch.setattr(app, "WORKSPACE_ROOT", tmp_path)
+    asset_file = tmp_path / "preview.png"
+    asset_file.write_bytes(b"fakepng")
+    asset_id = app.register_asset(asset_file, "image", "image/png", project="demo", source="generated")
+
+    preview = app.asset_preview(asset_id)
+
+    assert preview["id"] == asset_id
+    assert preview["kind"] == "image"
+    assert preview["download_url"].endswith(f"/api/assets/{asset_id}/download")
+    assert preview["preview_url"].endswith(f"/api/assets/{asset_id}/download")
+
+
 def test_chat_sessions_persist_list_history_and_delete(tmp_path: Path, monkeypatch):
     import app
 
@@ -269,6 +321,154 @@ def test_library_knowledge_category_is_persisted_and_deduplicated(tmp_path: Path
         rows = connection.execute("SELECT note, category, source FROM memories").fetchall()
 
     assert rows == [(note, "library_knowledge", "archive:gemma4-developer-agent")]
+
+
+def test_expired_browser_session_is_closed_and_rejected(monkeypatch):
+    import asyncio
+    import time
+
+    from fastapi import HTTPException
+
+    import app
+
+    class FakeContext:
+        def __init__(self):
+            self.closed = False
+
+        async def close(self):
+            self.closed = True
+
+    class FakePlaywright:
+        def __init__(self):
+            self.stopped = False
+
+        async def stop(self):
+            self.stopped = True
+
+    session_id = "expired-session"
+    now = time.time()
+    monkeypatch.setattr(app, "BROWSER_SESSION_TIMEOUT_SECONDS", 60)
+    monkeypatch.setattr(app, "BROWSER_SESSIONS", {
+        session_id: {
+            "context": FakeContext(),
+            "playwright": FakePlaywright(),
+            "page": object(),
+            "profile": "demo-profile",
+            "created_at": now - 120,
+            "last_seen": now - 120,
+        }
+    })
+
+    try:
+        asyncio.run(app.browser_session_action(app.BrowserSessionActionRequest(session_id=session_id, action="inspect")))
+    except HTTPException as exc:
+        assert exc.status_code == 408
+    else:
+        raise AssertionError("expired browser session should be rejected")
+
+    assert session_id not in app.BROWSER_SESSIONS
+
+
+def test_memory_taxonomy_entry_is_saved_with_labels(tmp_path: Path, monkeypatch):
+    import app
+
+    monkeypatch.setattr(app, "MEMORY_DB", tmp_path / "memory.db")
+    response = app.save_memory_entry(app.MemoryRequest(
+        note="Bu proje için testleri her değişiklikte kısıtlı şekilde çalıştır.",
+        category="procedure",
+        project="LocalQwenAgent",
+        source="agent",
+    ))
+
+    assert response["category"] == "procedure"
+    assert response["project"] == "LocalQwenAgent"
+    summary = app.memory_taxonomy_summary()
+    assert summary["categories"]["procedure"]["count"] >= 1
+
+
+def test_instagram_status_reports_missing_or_valid_token(monkeypatch):
+    import json
+
+    import app
+
+    calls = []
+
+    class FakeResponse:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def read(self):
+            return json.dumps(self.payload).encode("utf-8")
+
+    def fake_urlopen(request, timeout):
+        calls.append((request.full_url, timeout))
+        if "debug_token" in request.full_url:
+            return FakeResponse({"data": {"is_valid": True, "scopes": ["instagram_basic", "instagram_content_publish"], "user_id": "123"}})
+        return FakeResponse({"data": {"id": "123", "username": "demo_user", "account_type": "BUSINESS"}})
+
+    monkeypatch.setattr(app, "INSTAGRAM_ACCESS_TOKEN", "demo-token")
+    monkeypatch.setattr(app, "INSTAGRAM_USER_ID", "123")
+    monkeypatch.setattr(app, "urlopen", fake_urlopen)
+
+    status = app.instagram_status()
+
+    assert status["valid"] is True
+    assert status["token_present"] is True
+    assert status["user_id_present"] is True
+    assert status["scopes"]
+    assert calls
+
+    monkeypatch.setattr(app, "INSTAGRAM_ACCESS_TOKEN", "")
+    missing = app.instagram_status()
+    assert missing["valid"] is False
+    assert missing["status"] == "missing_credentials"
+
+
+def test_job_history_lists_research_and_media_entries(tmp_path: Path, monkeypatch):
+    import app
+
+    monkeypatch.setattr(app, "MEMORY_DB", tmp_path / "memory.db")
+    with app.db() as connection:
+        connection.execute(
+            "INSERT INTO job_records(job_id, kind, question, urls, status, artifact_dir, error) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("research-job-1", "research", "demo research", "[\"https://example.com\"]", "completed", "demo-artifact", ""),
+        )
+        connection.execute(
+            "INSERT INTO job_records(job_id, kind, question, urls, status, artifact_dir, error) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("media-job-1", "media", "demo video", "[]", "running", "demo-media", ""),
+        )
+
+    jobs = app.list_jobs()
+
+    assert {job["kind"] for job in jobs["jobs"]} >= {"research", "media"}
+    assert any(job["job_id"] == "research-job-1" for job in jobs["jobs"])
+    assert any(job["job_id"] == "media-job-1" for job in jobs["jobs"])
+
+
+def test_media_jobs_expose_progress_and_events_in_list(tmp_path: Path, monkeypatch):
+    import app
+
+    job_id = "video-progress-1"
+    app.MEDIA_JOBS[job_id] = {
+        "status": "running",
+        "progress": 42,
+        "events": [{"message": "Kareler hazirlaniyor."}],
+        "prompt": "demo prompt",
+        "created_at": "2026-09-28T00:00:00+00:00",
+        "updated_at": "2026-09-28T00:00:30+00:00",
+    }
+    jobs = app.list_jobs()
+    media_job = next(job for job in jobs["jobs"] if job["job_id"] == job_id)
+
+    assert media_job["status"] == "running"
+    assert media_job["progress"] == 42
+    assert media_job["events"][0]["message"] == "Kareler hazirlaniyor."
 
 
 def test_library_indexer_loads_local_playbook_without_archive(tmp_path: Path, monkeypatch):

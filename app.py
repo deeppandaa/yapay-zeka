@@ -7,6 +7,7 @@ import importlib.util
 import io
 import ipaddress
 import json
+import logging
 import math
 import os
 import re
@@ -23,7 +24,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode, urlparse
+from urllib.parse import quote, urlencode, urlparse
 from urllib.request import Request, urlopen
 
 from docx import Document
@@ -44,6 +45,7 @@ from agent_orchestrator import decide, plan_for, system_prompt
 from agent_tools import AgentTools
 
 load_dotenv()
+LOGGER = logging.getLogger(__name__)
 
 ROOT = Path(__file__).resolve().parent
 WORKSPACE_ROOT = Path(os.getenv("WORKSPACE_ROOT", str(ROOT))).resolve()
@@ -72,6 +74,7 @@ RESEARCH_JOBS: dict[str, dict[str, Any]] = {}
 RESEARCH_LOCK = threading.Lock()
 BROWSER_SESSIONS: dict[str, dict[str, Any]] = {}
 BROWSER_SESSION_LOCK = threading.Lock()
+BROWSER_SESSION_TIMEOUT_SECONDS = int(os.getenv("BROWSER_SESSION_TIMEOUT_SECONDS", "900"))
 MEDIA_JOBS: dict[str, dict[str, Any]] = {}
 MEDIA_JOB_LOCK = threading.Lock()
 IMAGE_PIPELINE: Any = None
@@ -834,7 +837,7 @@ def save_memory(note: str) -> None:
 
 
 def save_typed_memory(note: str, category: str = "general", project: str = "", source: str = "agent") -> None:
-    allowed = {"preference", "project_fact", "procedure", "research", "task_history", "library_knowledge", "general"}
+    allowed = {"preference", "project_fact", "procedure", "research", "task_history", "library_knowledge", "agent_workflow", "general"}
     category = category if category in allowed else "general"
     note = re.sub(r"\s+", " ", note).strip()
     with db() as connection:
@@ -848,6 +851,60 @@ def save_typed_memory(note: str, category: str = "general", project: str = "", s
             "INSERT INTO memories(note, category, project, source) VALUES (?, ?, ?, ?)",
             (note[:40_000], category, project[:200], source[:200]),
         )
+
+
+def save_memory_entry(request: MemoryRequest) -> dict[str, Any]:
+    note = re.sub(r"\s+", " ", str(request.note or "")).strip()
+    if not note:
+        raise HTTPException(400, "Not bos olmalidir.")
+    category = str(request.category or "general").strip() or "general"
+    project = str(request.project or "").strip()[:200]
+    source = str(request.source or "agent").strip() or "agent"
+    if category not in {"preference", "project_fact", "procedure", "research", "task_history", "library_knowledge", "agent_workflow", "general"}:
+        category = "general"
+    save_typed_memory(note, category, project, source)
+    with db() as connection:
+        row = connection.execute(
+            "SELECT id, note, category, project, source, created_at FROM memories WHERE note = ? AND category = ? AND project = ? AND source = ? ORDER BY id DESC LIMIT 1",
+            (note[:40_000], category, project[:200], source[:200]),
+        ).fetchone()
+    if row is None:
+        return {"status": "saved", "note": note, "category": category, "project": project, "source": source}
+    fields = ("id", "note", "category", "project", "source", "created_at")
+    payload = dict(zip(fields, row))
+    payload["status"] = "saved"
+    return payload
+
+
+def memory_taxonomy_summary() -> dict[str, Any]:
+    with db() as connection:
+        rows = connection.execute(
+            "SELECT category, project, source, COUNT(*) FROM memories GROUP BY category, project, source ORDER BY category, project, source"
+        ).fetchall()
+    categories: dict[str, dict[str, Any]] = {}
+    total = 0
+    for category, project, source, count in rows:
+        bucket = categories.setdefault(
+            str(category or "general"),
+            {"count": 0, "projects": set(), "sources": set()},
+        )
+        bucket["count"] += int(count)
+        total += int(count)
+        if project:
+            bucket["projects"].add(project)
+        if source:
+            bucket["sources"].add(source)
+    summary = {
+        "total": total,
+        "categories": {},
+    }
+    for name, bucket in categories.items():
+        summary["categories"][name] = {
+            "count": int(bucket["count"]),
+            "projects": sorted(bucket["projects"]),
+            "sources": sorted(bucket["sources"]),
+        }
+    return summary
 
 
 def job_event(job_id: str, message: str, **extra: Any) -> None:
@@ -927,6 +984,77 @@ def index() -> FileResponse:
     return FileResponse(ROOT / "static" / "index.html")
 
 
+def instagram_status() -> dict[str, Any]:
+    token = (INSTAGRAM_ACCESS_TOKEN or "").strip()
+    user_id = (INSTAGRAM_USER_ID or "").strip()
+    if not token or not user_id:
+        return {
+            "status": "missing_credentials",
+            "valid": False,
+            "token_present": bool(token),
+            "user_id_present": bool(user_id),
+            "user_id": user_id,
+            "scopes": [],
+            "username": "",
+            "account_type": "",
+            "approval_required": True,
+        }
+    try:
+        app_token_qs = quote(token, safe="")
+        debug_request = Request(
+            f"https://graph.facebook.com/{INSTAGRAM_GRAPH_VERSION}/debug_token?input_token={app_token_qs}&access_token={app_token_qs}",
+            headers={"User-Agent": "LocalQwenAgent/0.1"},
+            method="GET",
+        )
+        with urlopen(debug_request, timeout=15) as response:
+            debug_payload = json.loads(response.read().decode("utf-8"))
+        data = debug_payload.get("data") if isinstance(debug_payload, dict) else {}
+        scopes = []
+        if isinstance(data.get("scopes"), list):
+            scopes = [str(item) for item in data.get("scopes", []) if str(item)]
+        is_valid = bool(data.get("is_valid"))
+        username = ""
+        account_type = ""
+        try:
+            me_request = Request(
+                f"https://graph.facebook.com/{INSTAGRAM_GRAPH_VERSION}/me?fields=id,username,account_type&access_token={app_token_qs}",
+                headers={"User-Agent": "LocalQwenAgent/0.1"},
+                method="GET",
+            )
+            with urlopen(me_request, timeout=15) as response:
+                me_payload = json.loads(response.read().decode("utf-8"))
+            if isinstance(me_payload, dict):
+                me_data = me_payload.get("data") if isinstance(me_payload.get("data"), dict) else me_payload
+                username = str(me_data.get("username") or "")
+                account_type = str(me_data.get("account_type") or "")
+        except (HTTPError, URLError, OSError, ValueError, json.JSONDecodeError):
+            pass
+        ok = is_valid and bool(data.get("user_id") or user_id)
+        return {
+            "status": "valid" if ok else "invalid_credentials",
+            "valid": ok,
+            "token_present": True,
+            "user_id_present": True,
+            "user_id": str(data.get("user_id") or user_id),
+            "username": username,
+            "account_type": account_type,
+            "scopes": scopes,
+            "approval_required": not ok,
+        }
+    except (HTTPError, URLError, ValueError, OSError, json.JSONDecodeError):
+        return {
+            "status": "invalid_credentials",
+            "valid": False,
+            "token_present": True,
+            "user_id_present": True,
+            "user_id": user_id,
+            "scopes": [],
+            "username": "",
+            "account_type": "",
+            "approval_required": True,
+        }
+
+
 @app.get("/api/status")
 def status() -> dict[str, Any]:
     runtime = runtime_status()
@@ -938,6 +1066,11 @@ def status() -> dict[str, Any]:
         "backup_root": str(AGENT_TOOLS.backup_root),
         "runtime": runtime,
     }
+
+
+@app.get("/api/instagram/status")
+def instagram_api_status() -> dict[str, Any]:
+    return instagram_status()
 
 
 def runtime_status() -> dict[str, Any]:
@@ -965,7 +1098,7 @@ def runtime_status() -> dict[str, Any]:
         "online": {
             "web_browsing": True,
             "github": True,
-            "instagram_api": bool(INSTAGRAM_ACCESS_TOKEN and INSTAGRAM_USER_ID),
+            "instagram_api": instagram_status()["valid"],
         },
         "approval_required": ["file_write", "command_execution", "browser_action", "instagram_publish"],
     }
@@ -1281,6 +1414,11 @@ def delete_memory_by_source(
     return {"status": "deleted", "source": source, "count": len(preview), "backup": str(backup)}
 
 
+@app.post("/api/memory")
+def create_memory(request: MemoryRequest) -> dict[str, Any]:
+    return save_memory_entry(request)
+
+
 @app.get("/api/memory")
 def list_memory() -> dict[str, Any]:
     with db() as connection:
@@ -1297,7 +1435,13 @@ def list_memory() -> dict[str, Any]:
             dict(zip(("id", "operation", "reasoning", "result", "created_at"), row))
             for row in operations
         ],
+        "taxonomy": memory_taxonomy_summary(),
     }
+
+
+@app.get("/api/memory/taxonomy")
+def taxonomy_memory() -> dict[str, Any]:
+    return memory_taxonomy_summary()
 
 
 @app.get("/api/memory/search")
@@ -1370,6 +1514,21 @@ def semantic_memory_search(q: str = Query(..., min_length=1, max_length=500), li
     return {"query": q, "retrieval": "embedding", "embedding_model": OLLAMA_EMBED_MODEL, "count": len(scored), "memories": [{**dict(zip(fields, row)), "score": score} for score, row in scored]}
 
 
+def asset_preview(asset_id: int) -> dict[str, Any]:
+    with db() as connection:
+        row = connection.execute(
+            "SELECT id, kind, path, relative_path, sha256, mime_type, project, source, metadata_json, created_at, updated_at FROM assets WHERE id = ?",
+            (asset_id,),
+        ).fetchone()
+    if not row:
+        raise HTTPException(404, "Asset bulunamadi.")
+    fields = ("id", "kind", "path", "relative_path", "sha256", "mime_type", "project", "source", "metadata_json", "created_at", "updated_at")
+    asset = dict(zip(fields, row))
+    asset["download_url"] = f"/api/assets/{asset_id}/download"
+    asset["preview_url"] = f"/api/assets/{asset_id}/download"
+    return asset
+
+
 @app.get("/api/assets")
 def list_assets(
     kind: str = Query("", max_length=30),
@@ -1393,7 +1552,17 @@ def list_assets(
             [*values, limit],
         ).fetchall()
     fields = ("id", "kind", "path", "relative_path", "sha256", "mime_type", "project", "source", "metadata_json", "created_at", "updated_at")
-    return {"count": len(rows), "assets": [dict(zip(fields, row)) for row in rows]}
+    assets = [dict(zip(fields, row)) for row in rows]
+    for asset in assets:
+        asset_id = int(asset["id"])
+        asset["download_url"] = f"/api/assets/{asset_id}/download"
+        asset["preview_url"] = f"/api/assets/{asset_id}/download"
+    return {"count": len(rows), "assets": assets}
+
+
+@app.get("/api/assets/{asset_id}/preview")
+def preview_asset(asset_id: int) -> dict[str, Any]:
+    return asset_preview(asset_id)
 
 
 @app.get("/api/assets/{asset_id}/download")
@@ -1422,15 +1591,20 @@ def synthesize_tts(request: TTSRequest) -> FileResponse:
 
         from piper import PiperVoice
 
+        voice_key = hashlib.sha256(f"{text}\n{PIPER_MODEL_PATH.resolve()!s}".encode()).hexdigest()[:32]
+        output_dir = ROOT / ".asset-store" / "generated"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output = output_dir / f"localqwen_tts_{voice_key}.wav"
+        if output.exists() and output.stat().st_size > 0:
+            register_asset(output, "audio", "audio/wav", source="generated", metadata={"text_length": len(text), "voice": PIPER_MODEL_PATH.stem, "cache_key": voice_key})
+            return FileResponse(output, media_type="audio/wav", filename="localqwen_tts.wav")
+
         with PIPER_VOICE_LOCK:
             if PIPER_VOICE is None:
                 PIPER_VOICE = PiperVoice.load(str(PIPER_MODEL_PATH))
-            output_dir = ROOT / ".asset-store" / "generated"
-            output_dir.mkdir(parents=True, exist_ok=True)
-            output = output_dir / f"localqwen_tts_{uuid.uuid4().hex}.wav"
             with wave.open(str(output), "wb") as wav_file:
                 PIPER_VOICE.synthesize_wav(text, wav_file)
-        register_asset(output, "audio", "audio/wav", source="generated", metadata={"text_length": len(text), "voice": PIPER_MODEL_PATH.stem})
+        register_asset(output, "audio", "audio/wav", source="generated", metadata={"text_length": len(text), "voice": PIPER_MODEL_PATH.stem, "cache_key": voice_key})
         return FileResponse(output, media_type="audio/wav", filename="localqwen_tts.wav")
     except Exception as exc:
         raise HTTPException(503, f"Yerel TTS basarisiz: {exc}") from exc
@@ -2112,14 +2286,57 @@ def research_job(job_id: str) -> dict[str, Any]:
         return {**job, "events": list(job.get("events", []))}
 
 
-@app.get("/api/research/jobs")
-def research_jobs() -> dict[str, Any]:
+def list_jobs(limit: int = 100) -> dict[str, Any]:
     with db() as connection:
         rows = connection.execute(
-            "SELECT job_id, kind, question, urls, status, artifact_dir, error, created_at, updated_at FROM job_records ORDER BY created_at DESC LIMIT 100"
+            "SELECT job_id, kind, question, urls, status, artifact_dir, error, created_at, updated_at FROM job_records ORDER BY created_at DESC LIMIT ?",
+            (limit,),
         ).fetchall()
-    fields = ("job_id", "kind", "question", "urls", "status", "artifact_dir", "error", "created_at", "updated_at")
-    return {"jobs": [dict(zip(fields, row)) for row in rows]}
+    jobs = []
+    for row in rows:
+        job = dict(zip(("job_id", "kind", "question", "urls", "status", "artifact_dir", "error", "created_at", "updated_at"), row))
+        job.setdefault("progress", 0)
+        job.setdefault("events", [])
+        jobs.append(job)
+
+    with MEDIA_JOB_LOCK:
+        for job_id, job in MEDIA_JOBS.items():
+            candidate = next((item for item in jobs if item.get("job_id") == job_id), None)
+            if candidate is not None:
+                candidate["kind"] = "media"
+                candidate["question"] = str(job.get("prompt") or candidate.get("question") or "video_generation")
+                candidate["status"] = str(job.get("status") or candidate.get("status") or "queued")
+                candidate["progress"] = int(job.get("progress", candidate.get("progress", 0)))
+                candidate["events"] = list(job.get("events", candidate.get("events", [])))
+                candidate["urls"] = candidate.get("urls") if isinstance(candidate.get("urls"), list) else []
+                candidate["artifact_dir"] = str(job.get("artifact_dir") or candidate.get("artifact_dir") or "")
+                candidate["error"] = str(job.get("error") or candidate.get("error") or "")
+                continue
+            jobs.append({
+                "job_id": job_id,
+                "kind": "media",
+                "question": str(job.get("prompt") or job.get("question") or "video_generation"),
+                "urls": [],
+                "status": str(job.get("status") or "queued"),
+                "progress": int(job.get("progress", 0)),
+                "events": list(job.get("events", [])),
+                "artifact_dir": str(job.get("artifact_dir") or ""),
+                "error": str(job.get("error") or ""),
+                "created_at": str(job.get("created_at") or datetime.now(UTC).isoformat(timespec="seconds")),
+                "updated_at": str(job.get("updated_at") or datetime.now(UTC).isoformat(timespec="seconds")),
+            })
+    jobs.sort(key=lambda item: item.get("updated_at") or item.get("created_at") or "", reverse=True)
+    return {"jobs": jobs[:limit]}
+
+
+@app.get("/api/jobs")
+def jobs_index() -> dict[str, Any]:
+    return list_jobs()
+
+
+@app.get("/api/research/jobs")
+def research_jobs() -> dict[str, Any]:
+    return list_jobs()
 
 
 @app.post("/api/research/jobs/{job_id}/cancel")
@@ -2212,11 +2429,45 @@ async def browser_action(request: BrowserActionRequest) -> dict[str, Any]:
         raise HTTPException(502, f"Browser action başarısız: {exc}") from exc
 
 
+async def _close_browser_session(session_id: str, session: dict[str, Any] | None = None) -> None:
+    session = session if session is not None else BROWSER_SESSIONS.get(session_id)
+    if not session:
+        return
+    try:
+        context = session.get("context")
+        if context is not None and hasattr(context, "close"):
+            await context.close()
+    except Exception:
+        LOGGER.debug("Browser context cleanup failed for session %s", session_id, exc_info=True)
+    try:
+        playwright = session.get("playwright")
+        if playwright is not None and hasattr(playwright, "stop"):
+            await playwright.stop()
+    except Exception:
+        LOGGER.debug("Playwright cleanup failed for session %s", session_id, exc_info=True)
+    with BROWSER_SESSION_LOCK:
+        BROWSER_SESSIONS.pop(session_id, None)
+
+
+async def _prune_expired_browser_sessions() -> None:
+    now = time.time()
+    expired: list[tuple[str, dict[str, Any]]] = []
+    with BROWSER_SESSION_LOCK:
+        for session_id, session in list(BROWSER_SESSIONS.items()):
+            last_seen = float(session.get("last_seen", session.get("created_at", now)))
+            if now - last_seen > BROWSER_SESSION_TIMEOUT_SECONDS:
+                expired.append((session_id, session))
+                BROWSER_SESSIONS.pop(session_id, None)
+    for session_id, session in expired:
+        await _close_browser_session(session_id, session)
+
+
 @app.post("/api/browser/session/start")
 async def browser_session_start(request: BrowserSessionStartRequest) -> dict[str, Any]:
     """Open a user-approved persistent browser profile without exposing cookies."""
     if not request.approved:
         return {"status": "approval_required", "profile_dir": request.profile_dir or "user-profile-browser"}
+    await _prune_expired_browser_sessions()
     try:
         from playwright.async_api import async_playwright
         profile = Path(request.profile_dir or (Path.home() / ".localqwen-browser-profile")).expanduser().resolve()
@@ -2227,8 +2478,9 @@ async def browser_session_start(request: BrowserSessionStartRequest) -> dict[str
         context = await playwright.chromium.launch_persistent_context(str(profile), headless=False)
         page = context.pages[0] if context.pages else await context.new_page()
         session_id = uuid.uuid4().hex
+        created_at = time.time()
         with BROWSER_SESSION_LOCK:
-            BROWSER_SESSIONS[session_id] = {"playwright": playwright, "context": context, "page": page, "profile": str(profile)}
+            BROWSER_SESSIONS[session_id] = {"playwright": playwright, "context": context, "page": page, "profile": str(profile), "created_at": created_at, "last_seen": created_at}
         return {"status": "started", "session_id": session_id, "profile": str(profile), "message": "Tarayici acildi; girisi kullanici kendi penceresinde yapabilir."}
     except HTTPException:
         raise
@@ -2241,7 +2493,15 @@ async def browser_session_action(request: BrowserSessionActionRequest) -> dict[s
     with BROWSER_SESSION_LOCK:
         session = BROWSER_SESSIONS.get(request.session_id)
     if not session:
-        raise HTTPException(404, "Browser oturumu bulunamadi.")
+        await _prune_expired_browser_sessions()
+        with BROWSER_SESSION_LOCK:
+            session = BROWSER_SESSIONS.get(request.session_id)
+        if not session:
+            raise HTTPException(404, "Browser oturumu bulunamadi.")
+    last_seen = float(session.get("last_seen", session.get("created_at", time.time())))
+    if time.time() - last_seen > BROWSER_SESSION_TIMEOUT_SECONDS:
+        await _close_browser_session(request.session_id, session)
+        raise HTTPException(408, "Browser oturumu zaman asimina ugradi; yeni oturum baslatilmalidir.")
     if request.action in {"click", "fill", "select"} and not request.approved:
         return {"status": "approval_required", "action": request.action, "selector": request.selector}
     if request.action not in {"inspect", "goto", "click", "fill", "select"}:
@@ -2259,6 +2519,9 @@ async def browser_session_action(request: BrowserSessionActionRequest) -> dict[s
             await page.locator(request.selector).first.fill(request.value)
         elif request.action == "select":
             await page.locator(request.selector).first.select_option(request.value)
+        with BROWSER_SESSION_LOCK:
+            if request.session_id in BROWSER_SESSIONS:
+                BROWSER_SESSIONS[request.session_id]["last_seen"] = time.time()
         return {"status": "completed", "url": page.url, "title": await page.title(), "content": (await page.locator("body").inner_text())[:40_000]}
     except HTTPException:
         raise
@@ -2268,12 +2531,7 @@ async def browser_session_action(request: BrowserSessionActionRequest) -> dict[s
 
 @app.post("/api/browser/session/close")
 async def browser_session_close(request: BrowserSessionActionRequest) -> dict[str, str]:
-    with BROWSER_SESSION_LOCK:
-        session = BROWSER_SESSIONS.pop(request.session_id, None)
-    if not session:
-        raise HTTPException(404, "Browser oturumu bulunamadi.")
-    await session["context"].close()
-    await session["playwright"].stop()
+    await _close_browser_session(request.session_id)
     return {"status": "closed"}
 
 
@@ -2538,6 +2796,29 @@ def generate_image(request: ImageGenerateRequest) -> FileResponse:
     return FileResponse(output, media_type="image/png", filename="localqwen_generated.png")
 
 
+def _encode_video_1080p(source: Path, output: Path, duration_seconds: float) -> None:
+    filter_graph = (
+        f"[0:v]tpad=stop_mode=clone:stop_duration={duration_seconds},"
+        "minterpolate=fps=24:mi_mode=mci:mc_mode=aobmc:vsbmc=1,split=2[background][foreground];"
+        "[background]scale=1920:1080:force_original_aspect_ratio=increase:flags=lanczos,"
+        "crop=1920:1080,boxblur=20:10,eq=brightness=-0.18[blurred];"
+        "[foreground]scale=1080:1080:force_original_aspect_ratio=decrease:flags=lanczos[subject];"
+        "[blurred][subject]overlay=(W-w)/2:(H-h)/2,format=yuv420p[video]"
+    )
+    subprocess.run(
+        [
+            "ffmpeg", "-y", "-i", str(source), "-filter_complex", filter_graph,
+            "-map", "[video]", "-an", "-c:v", "libx264", "-preset", "fast",
+            "-crf", "20", "-r", "24", "-t", str(duration_seconds),
+            "-movflags", "+faststart", str(output),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=600,
+    )
+
+
 @app.post("/api/media/video")
 def generate_video(request: VideoGenerateRequest) -> FileResponse:
     """Create a real local video when available, with an image-motion fallback."""
@@ -2566,12 +2847,21 @@ def generate_video(request: VideoGenerateRequest) -> FileResponse:
                     else:
                         VIDEO_PIPELINE.to(device)
                 frame_count = max(8, min(16, round(duration * 8)))
-                frames = VIDEO_PIPELINE(prompt, num_frames=frame_count, num_inference_steps=4).frames[0]
+                frames = VIDEO_PIPELINE(
+                    prompt,
+                    height=512,
+                    width=512,
+                    num_frames=frame_count,
+                    num_inference_steps=20,
+                ).frames[0]
             output_dir = ROOT / ".asset-store" / "generated"
             output_dir.mkdir(parents=True, exist_ok=True)
             output = output_dir / f"localqwen_real_video_{uuid.uuid4().hex}.mp4"
-            imageio.mimsave(output, frames, fps=8, codec="libx264")
-            register_asset(output, "video", "video/mp4", source="generated", metadata={"prompt": prompt, "duration_seconds": duration, "backend": "text-to-video-ms-1.7b"})
+            with tempfile.TemporaryDirectory(prefix="localqwen_video_source_") as temp_dir:
+                source = Path(temp_dir) / "source.mp4"
+                imageio.mimsave(source, frames, fps=8, codec="libx264")
+                _encode_video_1080p(source, output, duration)
+            register_asset(output, "video", "video/mp4", source="generated", metadata={"prompt": prompt, "duration_seconds": duration, "backend": "text-to-video-ms-1.7b", "source_resolution": "512x512", "output_resolution": "1920x1080", "fps": 24, "inference_steps": 20, "upscaled": True})
             return FileResponse(output, media_type="video/mp4", filename="localqwen_generated.mp4")
         except Exception as exc:
             if backend == "real":
@@ -2605,37 +2895,60 @@ def generate_video(request: VideoGenerateRequest) -> FileResponse:
     output_dir = ROOT / ".asset-store" / "generated"
     output_dir.mkdir(parents=True, exist_ok=True)
     persistent_output = output_dir / f"localqwen_video_{uuid.uuid4().hex}.mp4"
-    shutil.copy2(output, persistent_output)
-    register_asset(persistent_output, "video", "video/mp4", source="generated", metadata={"prompt": prompt, "duration_seconds": duration, "backend": "image-motion-ffmpeg"})
+    _encode_video_1080p(output, persistent_output, duration)
+    register_asset(persistent_output, "video", "video/mp4", source="generated", metadata={"prompt": prompt, "duration_seconds": duration, "backend": "image-motion-ffmpeg", "output_resolution": "1920x1080", "fps": 24, "upscaled": True})
     return FileResponse(persistent_output, media_type="video/mp4", filename="localqwen_generated.mp4", background=BackgroundTask(shutil.rmtree, directory, ignore_errors=True))
 
 
 @app.post("/api/media/video/start")
 def start_video_job(request: VideoGenerateRequest) -> dict[str, str]:
     job_id = uuid.uuid4().hex
+    now = datetime.now(UTC).isoformat(timespec="seconds")
     with MEDIA_JOB_LOCK:
-        MEDIA_JOBS[job_id] = {"status": "queued", "progress": 0, "events": [{"message": "Video işi kuyruğa alındı."}], "cancel_requested": False}
+        MEDIA_JOBS[job_id] = {
+            "status": "queued",
+            "progress": 0,
+            "events": [{"message": "Video işi kuyruğa alındı."}],
+            "cancel_requested": False,
+            "prompt": request.prompt,
+            "created_at": now,
+            "updated_at": now,
+        }
+    with db() as connection:
+        connection.execute(
+            "INSERT INTO job_records(job_id, kind, question, urls, status, artifact_dir, error, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (job_id, "media", request.prompt, "[]", "queued", "", "", now, now),
+        )
 
     def worker() -> None:
         with MEDIA_JOB_LOCK:
-            MEDIA_JOBS[job_id].update(status="running", progress=10, events=[{"message": "Video modeli hazırlanıyor."}])
+            MEDIA_JOBS[job_id].update(status="running", progress=10, events=[{"message": "Video modeli hazırlanıyor."}], updated_at=datetime.now(UTC).isoformat(timespec="seconds"))
+        with db() as connection:
+            connection.execute("UPDATE job_records SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE job_id = ?", ("running", job_id))
         try:
             with MEDIA_JOB_LOCK:
                 if MEDIA_JOBS[job_id]["cancel_requested"]:
-                    MEDIA_JOBS[job_id].update(status="cancelled", progress=0)
+                    MEDIA_JOBS[job_id].update(status="cancelled", progress=0, updated_at=datetime.now(UTC).isoformat(timespec="seconds"))
+                    with db() as connection:
+                        connection.execute("UPDATE job_records SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE job_id = ?", ("cancelled", job_id))
                     return
                 MEDIA_JOBS[job_id]["progress"] = 25
                 MEDIA_JOBS[job_id]["events"].append({"message": "Prompt işleniyor ve kareler üretiliyor."})
+                MEDIA_JOBS[job_id]["updated_at"] = datetime.now(UTC).isoformat(timespec="seconds")
             response = generate_video(request)
             path = Path(response.path)
             with db() as connection:
                 row = connection.execute("SELECT id FROM assets WHERE path = ? ORDER BY id DESC LIMIT 1", (str(path.resolve()),)).fetchone()
             with MEDIA_JOB_LOCK:
                 cancelled = MEDIA_JOBS[job_id]["cancel_requested"]
-                MEDIA_JOBS[job_id].update(status="cancelled" if cancelled else "completed", progress=100 if not cancelled else 0, asset_id=int(row[0]) if row and not cancelled else None, events=[{"message": "Video iptal edildi." if cancelled else "Video hazır."}])
+                MEDIA_JOBS[job_id].update(status="cancelled" if cancelled else "completed", progress=100 if not cancelled else 0, asset_id=int(row[0]) if row and not cancelled else None, events=[{"message": "Video iptal edildi." if cancelled else "Video hazır."}], updated_at=datetime.now(UTC).isoformat(timespec="seconds"))
+            with db() as connection:
+                connection.execute("UPDATE job_records SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE job_id = ?", ("cancelled" if cancelled else "completed", job_id))
         except Exception as exc:
             with MEDIA_JOB_LOCK:
-                MEDIA_JOBS[job_id].update(status="failed", progress=0, error=str(exc), events=[{"message": f"Video hatası: {exc}"}])
+                MEDIA_JOBS[job_id].update(status="failed", progress=0, error=str(exc), events=[{"message": f"Video hatası: {exc}"}], updated_at=datetime.now(UTC).isoformat(timespec="seconds"))
+            with db() as connection:
+                connection.execute("UPDATE job_records SET status = ?, error = ?, updated_at = CURRENT_TIMESTAMP WHERE job_id = ?", ("failed", str(exc), job_id))
 
     threading.Thread(target=worker, daemon=True).start()
     return {"job_id": job_id, "status": "queued"}

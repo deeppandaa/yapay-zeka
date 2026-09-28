@@ -1,0 +1,109 @@
+DeepPanda / LocalQwenAgent - Bugunluk Islem Planı ve Geliştirme Listesi
+====================================================================
+
+Tarih: 2026-09-27
+Durum: Sistem güvenli, canlı, test edilmiş ve üretim kullanımına hazır.
+
+1) Bugünlük ana hedef
+---------------------
+- Mevcut sistemin kararlılığını korumak.
+- Yeni özellik eklemek yerine, mevcut çalışma akışını sağlamlaştırmak.
+- GitHub, yedekler, hafıza ve güvenlik akışlarını bozmadan ilerlemek.
+- Büyük ve riskli feature'leri backlog'ta tutmak.
+
+2) Bugünlük gerçek öncelik sırası
+---------------------------------
+P1 - Çok önemli / hemen yapılabilir
+1. TTS/WAV cache ve tekrar üretmeme kontrolü
+2. Asset galerisi ve önizleme
+3. Hafıza ayrıştırma / etiketleme
+4. Browser oturum güvenliği ve süre yönetimi
+
+P2 - Kısa vadede yapılacak ama acil
+5. Instagram izin/token durum kontrolü
+6. Job geçmişi ve yeniden çalıştırma
+7. Video job ilerleme yüzdesi
+
+P3 - Sonraki session / uzun vadeli backlog
+8. Güncel text-to-video modeline geçiş
+9. Video job kuyruğunu kalıcı SQLite tabanlı hale getirme
+10. Job ilerleme yüzdesini gerçek model adımlarından üretme
+11. Browser oturumlarını güvenli kalıcı servis haline getirme
+12. Browser oturum süresi ve otomatik kapanma
+13. Instagram DM ve Reels hata yönetimini geliştirme
+14. Asset silme / arşivleme / etiketleme
+15. Hafıza türlerini daha ayrıntılı ayırma
+16. TTS ses karşılaştırma ve ses profili kaydetme
+17. TTS WAV cache ve tekrar üretmeme
+18. Mobil UI ve sidebar düzeni
+19. Tam entegrasyon testleri
+20. Kurulum ve model indirme sihirbazı
+21. Log / diagnostic ekranı
+22. Release paketleme ve installer güncellemesi
+
+3) Bugünlük production sonrası çalışma kuralı
+--------------------------------------------
+- Yeni özellik eklemeden önce küçük doğrulama yap.
+- Her modül için test/health kontrolü şart olsun.
+- Büyük riskli iş akışlarını backlogta bırak.
+- GitHub, yedek depolar ve hafıza mutex / güvenlik akışını koru.
+- Her değişiklikte minimal, izlenebilir ve geri alınabilir tutum benimsenmelidir.
+
+4) Mevcut sistemin mevcut durumu
+---------------------------------
+- LocalQwenAgent canlı ve çalışır durumda.
+- GitHub / yedek / hafıza güvenli ve sürdürülebilir durumda.
+- Riskli istekler approval-required akışı ile korunuyor.
+- pytest, py_compile ve ruff doğrulaması başarılı.
+- Evaluasyon akışı çalışır durumda.
+- GPU ve yerel offline-first runtime hazır.
+
+5) Bugünkü akış önerisi
+----------------------
+1. TTS cache ve tekrar üretmeme kontrolü
+2. Asset galerisi ve önizleme
+3. Hafıza ayrıştırma / etiketleme
+4. Browser güvenli oturum yönetimi
+5. Instagram izin/token kontrolü
+6. Job geçmişi ve yeniden çalıştırma
+7. Job ilerleme yüzdesi
+
+6) İş akışına dair notlar
+------------------------
+- Bugün “yeni büyük feature ekleme” değil, “mevcut üretim altyapısını sağlamlaştırma” odaklı ilerle.
+- Büyük modeller ve video iş akışları için sonraki session hedefi olarak kalmalı.
+- Bu liste özellikle proje için “bugünlük net çalışma kabulü” olarak kullanılsın.
+
+7) Kısa özet
+------------
+Bu liste, bugün için gerçek, uygulanabilir ve güvenli üretim önceliklerini yansıtır.
+Kısa vadede işin odak noktası: çalışır sistemin korunması ve küçük ama kritik iyileştirmeler.
+Büyük ve riskli roadmap maddeleri ise backlog olarak kalmalıdır.
+
+8) Geniş backlog / uzun vadeli geliştirme listesi
+--------------------------------------------------
+1. Güncel text-to-video modeline geçiş
+2. Video job kuyruğunu kalıcı SQLite tabanlı hale getirme
+3. Job ilerleme yüzdesini gerçek model adımlarından üretme
+4. Job geçmişi ve yeniden çalıştırma
+5. Browser oturumlarını güvenli kalıcı servis haline getirme
+6. Browser oturum süresi ve otomatik kapanma
+7. Instagram izin/token durum kontrolü
+8. Instagram DM ve Reels hata yönetimini geliştirme
+9. Asset galerisi ve önizleme ekranı
+10. Asset silme / arşivleme / etiketleme
+11. Hafıza türlerini daha ayrıntılı ayırma
+12. TTS ses karşılaştırma ve ses profili kaydetme
+13. TTS WAV cache ve tekrar üretmeme
+14. Mobil UI ve sidebar düzeni
+15. Tam entegrasyon testleri
+16. Kurulum ve model indirme sihirbazı
+17. Log / diagnostic ekranı
+18. Release paketleme ve installer güncellemesi
+
+9) Bugünlük kullanım notu
+-------------------------
+- Bu dosya kısa vadeli üretim görüşünü ve uzun vadeli backlog'u birlikte tutar.
+- Bugün için P1/P2 maddeler esas alınır.
+- Diğer maddeler bu dosyada kalır; çalışan sistemin güvenliği önceliklidir.
+- Bu plan, bugün için net ve uygulanabilir iş takvimi olarak kullanılır.
