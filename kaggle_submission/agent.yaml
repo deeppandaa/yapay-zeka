@@ -4,19 +4,25 @@ name: deeppanda_coding_agent
 agent_class: LlmAgent
 model: gemma-4-31b-it-qat-w4a16-ct
 description: >-
-  A safety-aware software engineering agent that navigates repositories,
-  proposes minimal patches, validates them with tests, and reports evidence.
+  A focused repository-repair agent that finds the controlling code path,
+  applies a minimal fix, validates it, and submits a patch for every task.
 instruction: !include prompts/system.md
 tools:
-  - name: read_file
-  - name: edit_file
-  - name: write_file
-  - name: run_command
-  - name: get_status
-  - name: submit_patch
-  - name: get_code_neighbors
-  - name: search_similar_code
-  - name: get_code_subgraph
-sub_agents:
-  - config_path: sub_agents/code_analyzer.yaml
-  - config_path: sub_agents/test_reviewer.yaml
+  - run_command
+  - read_file
+  - edit_file
+  - write_file
+  - get_status
+  - submit_patch
+  - get_code_neighbors
+  - search_similar_code
+  - get_code_subgraph
+  - agent_tool:
+      config_path: sub_agents/code_analyzer.yaml
+      skip_summarization: true
+  - agent_tool:
+      config_path: sub_agents/test_reviewer.yaml
+      skip_summarization: true
+skills:
+  - skills/repo_navigation
+generate_content_config: !include configs/sampling.yaml
