@@ -1,41 +1,32 @@
-# LocalQwenAgent Yükleme ve Teslim Planı
+# LocalQwenAgent - Açık Geliştirme Planı
 
-## Durum
-- Instagram token doğrulaması hazır.
-- Job history ve media job akışı birleştirildi.
-- Video progress pipeline çalışıyor.
-- Progress UI görünümü eklendi.
-- İlgili regresyon testi başarıyla geçti.
+Güncelleme: 2026-09-28. Tamamlanan maddeler backlog'dan çıkarıldı; aşağıda yalnız açık işler var.
 
-## Doğrulanan komut
-```powershell
-Set-Location -LiteralPath 'D:\DeepPanda-Proje\Yapay Zeka'; py -m pytest -q test_agent.py -k 'media_jobs_expose_progress_and_events_in_list or job_history_lists_research_and_media_entries or instagram_status_reports_missing_or_valid_token or expired_browser_session_is_closed_and_rejected or memory_taxonomy_entry_is_saved_with_labels or library_knowledge_category_is_persisted_and_deduplicated'
-```
+## P1 - Sonraki geliştirme oturumu
 
-## Sonuç
-- 6 passed
-- 22 deselected
-- exit code: 0
+1. **Video job güvenilirliği:** Model callback'lerinden gerçek adım/yüzde ilerlemesi; restart sonrası job geçmişinin tutarlı durumu; failed/cancelled job retry.
+2. **Asset yönetimi:** Kalıcı silme onaylı API/UI ile tamamlandı. Kalan: tarih/proje filtreleri, arşivleme/etiketleme ve geri alma.
+3. **Browser oturum güvenliği:** Oturum sahipliği, süre sonu ve kapanma testleri; session ID tahmini/başka istemci erişimine karşı koruma; güvenli profil dizini allowlist'i.
+4. **Instagram hata/izin akışı:** Token scope preflight, video/Reels processing status, rate-limit/permission hata kodlarını kullanıcıya eyleme dönük gösterme. Gerçek hesap izni yoksa yayın testi mock ile kalmalı.
+5. **Kaggle yeniden skor:** Yeni `DeepPanda-Gemma4-submission.zip` yerel validator'dan geçti; eski skorlar 0.00. Günlük submission limiti açılınca tek gönderim yapıp task bazlı sonucu incele.
 
-## Aktif öncelik sırası
-1. Self-audit ve küçük temizlik
-2. Kod ve UI final görünümünü netleştirme
-3. Final teslim notu hazırlama
-4. Düşük öncelikli iyileştirmeleri backlog'a alma
+## P2 - Orta vadeli
 
-## Uygulanacak AI davranış kuralı
-- Her yeni değişiklik için önce bir hedef testi yaz.
-- Hata oluşursa kök nedenini doğrula; rastgele patch atma.
-- Job, media, browser ve Instagram akışları ayrı ayrı kontrol et.
-- Değişiklik sonrası en küçük doğrulama setini çalıştır.
-- Her adım sonunda kısa bir durum özeti tut.
+6. Güncel ve desteklenen text-to-video pipeline/modeline geçiş; 8 GB VRAM'de ölçümlü model seçimi ve mevcut backend fallback'i.
+7. Browser ve Instagram uçtan uca integration testleri; harici servisler için mock ve izinli gerçek smoke test ayrımı.
+8. TTS ses profillerini adlandırıp kaydetme ve sesleri karşılaştırma.
+9. Mobil/sidebar düzeni, job history paneli ve diagnostic/log görünümü.
 
-## Riskler
-- Gerçek medya üretimi bazı sistemlerde model eksikliği nedeniyle başarısız olabilir.
-- Browser ve Instagram akışları dış erişim/açık izin gerektirir.
-- UI ve backend senkronizasyonu için polling ve job lifecycle kontrolü gerekir.
+## P3 - Uzun vadeli
 
-## Sonraki hedef
-- Producing a final ready-to-ship checklist
-- Kalan küçük temizlikleri bitir
-- Kullanıcıya net teslim özeti hazırla
+10. Kurulum/model indirme sihirbazı ve disk alanı/sha256 doğrulaması.
+11. Release installer ve portable restore akışını yeni Piper/video runtime seçenekleriyle güncelleme.
+12. Model bazlı kalite, hız, bellek ve patch-pass benchmark raporu.
+
+## Değişmez çalışma kuralları
+
+- Önce bir hedef testi ve falsifiye edilebilir yerel hipotez belirle.
+- En küçük değişikliği yap; kullanıcıya ait değişiklikleri koru.
+- Ollama, Meta veya Kaggle erişimi yoksa bunu açıkça bildir; başarılıymış gibi davranma.
+- Her release'te Ruff, compile, pytest, evaluation, veri/paket validator'ı çalıştır; sonra GitHub ve D/E yedeklerini hash ile eşitle.
+- `.venv`, model cache ve üretilmiş asset'ler Git'e eklenmez; kullanıcı asset yedeklemesini ayrıca kapsama al.

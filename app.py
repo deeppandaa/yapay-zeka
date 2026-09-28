@@ -1577,6 +1577,38 @@ def download_asset(asset_id: int) -> FileResponse:
     return FileResponse(path, media_type=row[1] or None, filename=path.name)
 
 
+@app.delete("/api/assets/{asset_id}")
+def delete_asset(asset_id: int, approved: bool = Query(False)) -> dict[str, Any]:
+    with db() as connection:
+        row = connection.execute("SELECT path, kind FROM assets WHERE id = ?", (asset_id,)).fetchone()
+    if not row:
+        raise HTTPException(404, "Asset bulunamadi.")
+    candidate = Path(row[0])
+    asset_root = (ROOT / ".asset-store").resolve()
+    if candidate.is_symlink():
+        raise HTTPException(403, "Sembolik baglanti olan asset silinemez.")
+    path = candidate.resolve()
+    if asset_root not in path.parents:
+        raise HTTPException(403, "Yalniz .asset-store altindaki yonetilen asset dosyalari silinebilir.")
+    if not approved:
+        return {"status": "approval_required", "asset_id": asset_id, "kind": row[1], "filename": path.name}
+    file_removed = False
+    try:
+        if path.is_file():
+            path.unlink()
+            file_removed = True
+    except OSError as exc:
+        raise HTTPException(500, f"Asset dosyasi silinemedi: {exc}") from exc
+    with db() as connection:
+        connection.execute("DELETE FROM assets WHERE id = ?", (asset_id,))
+    journal_operation(
+        "asset_delete",
+        "Kullanici asset kalici silme islemini onayladi.",
+        json.dumps({"asset_id": asset_id, "kind": row[1], "file_removed": file_removed}, ensure_ascii=False),
+    )
+    return {"status": "deleted", "asset_id": asset_id, "file_removed": file_removed}
+
+
 @app.post("/api/tts")
 def synthesize_tts(request: TTSRequest) -> FileResponse:
     """Synthesize Turkish speech locally with the configured Piper voice."""

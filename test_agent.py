@@ -178,6 +178,7 @@ def test_tts_cache_reuses_same_voice_output(monkeypatch, tmp_path):
     fake_model.write_bytes(b"fake-model")
     monkeypatch.setattr(app, "PIPER_MODEL_PATH", fake_model)
     monkeypatch.setattr(app, "ROOT", tmp_path)
+    monkeypatch.setattr(app, "MEMORY_DB", tmp_path / "memory.db")
     monkeypatch.setattr(app, "PIPER_VOICE", None)
 
     class FakeVoice:
@@ -208,6 +209,7 @@ def test_asset_preview_returns_download_and_preview_urls(monkeypatch, tmp_path):
     import app
 
     monkeypatch.setattr(app, "WORKSPACE_ROOT", tmp_path)
+    monkeypatch.setattr(app, "MEMORY_DB", tmp_path / "memory.db")
     asset_file = tmp_path / "preview.png"
     asset_file.write_bytes(b"fakepng")
     asset_id = app.register_asset(asset_file, "image", "image/png", project="demo", source="generated")
@@ -218,6 +220,45 @@ def test_asset_preview_returns_download_and_preview_urls(monkeypatch, tmp_path):
     assert preview["kind"] == "image"
     assert preview["download_url"].endswith(f"/api/assets/{asset_id}/download")
     assert preview["preview_url"].endswith(f"/api/assets/{asset_id}/download")
+
+
+def test_asset_delete_requires_approval_and_removes_managed_file(monkeypatch, tmp_path):
+    import app
+
+    monkeypatch.setattr(app, "ROOT", tmp_path)
+    monkeypatch.setattr(app, "MEMORY_DB", tmp_path / "memory.db")
+    asset_file = tmp_path / ".asset-store" / "generated" / "remove-me.png"
+    asset_file.parent.mkdir(parents=True)
+    asset_file.write_bytes(b"asset")
+    asset_id = app.register_asset(asset_file, "image", "image/png", source="generated")
+
+    pending = app.delete_asset(asset_id, approved=False)
+    assert pending["status"] == "approval_required"
+    assert asset_file.is_file()
+
+    deleted = app.delete_asset(asset_id, approved=True)
+    assert deleted == {"status": "deleted", "asset_id": asset_id, "file_removed": True}
+    assert not asset_file.exists()
+    assert app.list_assets(q="remove-me", limit=100)["assets"] == []
+
+
+def test_asset_delete_rejects_paths_outside_managed_store(monkeypatch, tmp_path):
+    import app
+
+    monkeypatch.setattr(app, "ROOT", tmp_path)
+    monkeypatch.setattr(app, "MEMORY_DB", tmp_path / "memory.db")
+    outside_file = tmp_path / "user-document.txt"
+    outside_file.write_text("keep", encoding="utf-8")
+    asset_id = app.register_asset(outside_file, "document", "text/plain", source="local")
+
+    try:
+        app.delete_asset(asset_id, approved=True)
+    except app.HTTPException as exc:
+        assert exc.status_code == 403
+    else:
+        raise AssertionError("asset deletion must reject files outside .asset-store")
+
+    assert outside_file.read_text(encoding="utf-8") == "keep"
 
 
 def test_chat_sessions_persist_list_history_and_delete(tmp_path: Path, monkeypatch):
